@@ -1,0 +1,36 @@
+{
+    "name": "utopia-php/mongo",
+    "description": "A simple library to manage Mongo database",
+    "type": "library",
+    "keywords": ["php","mongo", "upf", "utopia", "database"],
+    "license": "MIT",
+    "minimum-stability": "stable",
+    "authors": [
+        {
+            "name": "Eldad Fux",
+            "email": "eldad@appwrite.io"
+        },
+        {
+            "name": "Wess",
+            "email": "wess@appwrite.io"
+        }
+    ],
+    "autoload": {
+        "psr-4": {"Utopia\\Mongo\\": "src/Mongo"}
+    },
+    "autoload-dev": {
+        "psr-4": {"Utopia\\Tests\\": "tests/Mongo"}
+    },
+    "require": {
+        "php": ">=8.0",
+        "ext-mongodb": "*",
+        "mongodb/mongodb": "1.8.0"
+    },
+    "require-dev": {
+        "fakerphp/faker": "^1.14",
+        "phpunit/phpunit": "^9.4",
+        "swoole/ide-helper": "4.8.0",
+        "utopia-php/cli": "^0.11.0",
+        "vimeo/psalm": "4.0.1"
+    }
+}

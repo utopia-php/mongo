@@ -1,6 +1,6 @@
 <?php
 
-namespace Utopia\Database\Adapter\Mongo;
+namespace Utopia\Mongo;
 
 use MongoDB\BSON;
 

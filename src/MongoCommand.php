@@ -1,6 +1,6 @@
 <?php
 
-namespace Utopia\Mongo;
+namespace Mongo;
 
 class MongoCommand
 {

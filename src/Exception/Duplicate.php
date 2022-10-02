@@ -1,6 +1,6 @@
 <?php
 
-namespace Mongo;
+namespace Mongo\Exception;
 
 class Duplicate extends \Exception
 {

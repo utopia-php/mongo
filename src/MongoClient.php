@@ -6,7 +6,7 @@ use MongoDB\BSON;
 use stdClass;
 use Swoole\Client;
 use Swoole\Coroutine\Client as CoroutineClient;
-use Mongo\Duplicate as DuplicateException;
+use Mongo\Exception\Duplicate as DuplicateException;
 
 class MongoClient
 {

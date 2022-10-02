@@ -73,6 +73,7 @@ class MongoClient
     /**
      * Send a raw string query to connection.
      * @param string $qry
+     * @return mixed
      */
     public function raw_query(string $qry): mixed
     {
@@ -83,7 +84,8 @@ class MongoClient
      * Send a BSON packed query to connection.
      *
      * @param array $command
-     * @param string $db
+     * @param string|null $db
+     * @return stdClass|array|int
      */
     public function query(array $command, ?string $db = null): stdClass|array|int
     {

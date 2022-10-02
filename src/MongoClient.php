@@ -6,7 +6,6 @@ use MongoDB\BSON;
 use stdClass;
 use Swoole\Client;
 use Swoole\Coroutine\Client as CoroutineClient;
-use Utopia\Database\Document;
 use Mongo\Duplicate as DuplicateException;
 
 class MongoClient
@@ -86,7 +85,7 @@ class MongoClient
      * @param array $command
      * @param string $db
      */
-    public function query(array $command, ?string $db = null): \stdClass|array|int
+    public function query(array $command, ?string $db = null): stdClass|array|int
     {
         $params = array_merge($command, [
             '$db' => $db ?? $this->options->name,
@@ -101,7 +100,7 @@ class MongoClient
     /**
      * Send a syncronous command to connection.
      */
-    public function blocking(string $cmd): \stdClass|array|int
+    public function blocking(string $cmd): stdClass|array|int
     {
         $this->client->send($cmd . PHP_EOL);
 
@@ -119,7 +118,7 @@ class MongoClient
      *
      * @param mixed $data
      */
-    public function send(mixed $data): \stdClass|array|int
+    public function send(mixed $data): stdClass|array|int
     {
         $this->client->send($data);
 
@@ -129,7 +128,7 @@ class MongoClient
     /**
      * Receive a message from connection.
      */
-    private function receive(): \stdClass|array|int
+    private function receive(): stdClass|array|int
     {
         $receivedLength = 0;
         $responseLength = null;
@@ -202,7 +201,7 @@ class MongoClient
     /**
      * Get a list of databases.
      */
-    public function listDatabaseNames(): \stdClass
+    public function listDatabaseNames(): stdClass
     {
         return $this->query([
             'listDatabases' => 1,
@@ -215,7 +214,8 @@ class MongoClient
      * https://docs.mongodb.com/manual/reference/command/dropDatabase/#mongodb-dbcommand-dbcmd.dropDatabase
      *
      * @param array $options
-     * @param string $db
+     * @param string|null $db
+     * @return MongoClient
      */
     public function dropDatabase(array $options = [], ?string $db = null): MongoClient
     {
@@ -276,9 +276,9 @@ class MongoClient
      * @param array $filter
      * @param array $options
      *
-     * @return \stdClass
+     * @return stdClass
      */
-    public function listCollectionNames(array $filter = [], array $options = []): \stdClass
+    public function listCollectionNames(array $filter = [], array $options = []): stdClass
     {
         $qry = array_merge(
             [
@@ -361,7 +361,7 @@ class MongoClient
      */
     public function insert(string $collection, array $documents, array $options = []): array
     {
-        $docObj = new \stdClass();
+        $docObj = new stdClass();
 
         foreach ($documents as $key => $value) {
             if(\is_null($value)) continue;
@@ -482,9 +482,9 @@ class MongoClient
      * @param array $filters
      * @param array $options
      *
-     * @return \stdClass
+     * @return stdClass
      */
-    public function find(string $collection, array $filters = [], array $options = []): \stdClass
+    public function find(string $collection, array $filters = [], array $options = []): stdClass
     {
         $result =  $this->query(
             array_merge([
@@ -510,7 +510,7 @@ class MongoClient
      *
      * @return array
      */
-    public function findAndModify(string $collection, array $update, bool $remove = false, array $filters = [], array $options = []): \stdClass
+    public function findAndModify(string $collection, array $update, bool $remove = false, array $filters = [], array $options = []): stdClass
     {
         $result = $this->query(
             array_merge([
@@ -532,9 +532,9 @@ class MongoClient
      * @param string $collection
      * @param int batchSize
      *
-     * @return  \stdClass
+     * @return  stdClass
      */
-    public function getMore(int $cursorId, string $collection, int $batchSize = 25): \stdClass
+    public function getMore(int $cursorId, string $collection, int $batchSize = 25): stdClass
     {
         return $this->query([
             MongoCommand::GET_MORE => $cursorId,
@@ -601,9 +601,9 @@ class MongoClient
      * @param string $collection
      * @param array $pipeline
      *
-     * @return \stdClass
+     * @return stdClass
      */
-    public function aggregate(string $collection, array $pipeline): \stdClass
+    public function aggregate(string $collection, array $pipeline): stdClass
     {
         $result = $this->query([
             MongoCommand::AGGREGATE => $collection,
@@ -621,9 +621,9 @@ class MongoClient
      *
      * @return stdClass
      */
-    public function toObject(array $dict): \stdClass
+    public function toObject(array $dict): stdClass
     {
-        $obj = new \stdClass();
+        $obj = new stdClass();
 
         foreach ($dict as $k => $v) {
             $obj->{$k} = $v;
@@ -635,11 +635,11 @@ class MongoClient
     /**
      * Convert an object (stdClass) to an assoc array.
      *
-     * @param string $obj
+     * @param stdClass|array|string|null $obj
      *
-     * @return array
+     * @return array|null
      */
-    public function toArray(\stdClass|array|string|null $obj): array|null
+    public function toArray(stdClass|array|string|null $obj): array|null
     {
         if(\is_null($obj)) return null;
 

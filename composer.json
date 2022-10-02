@@ -19,7 +19,7 @@
         "psr-4": {"Utopia\\Mongo\\": "src/Mongo"}
     },
     "autoload-dev": {
-        "psr-4": {"Utopia\\Tests\\": "tests/Mongo"}
+        "psr-4": {"Utopia\\Tests\\": "tests"}
     },
     "require": {
         "php": ">=8.0",

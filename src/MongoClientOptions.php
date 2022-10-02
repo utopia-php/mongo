@@ -1,6 +1,7 @@
 <?php
 
-namespace Mongo;
+namespace Utopia\Mongo;
+
 
 class MongoClientOptions
 {

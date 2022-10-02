@@ -1,12 +1,12 @@
 <?php
 
-namespace Mongo;
+namespace Utopia\Mongo;
 
 use MongoDB\BSON;
-use stdClass;
 use Swoole\Client;
 use Swoole\Coroutine\Client as CoroutineClient;
 use Mongo\Exception\Duplicate as DuplicateException;
+use stdClass;
 
 class MongoClient
 {

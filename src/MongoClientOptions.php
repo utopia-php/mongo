@@ -2,7 +2,6 @@
 
 namespace Utopia\Mongo;
 
-
 class MongoClientOptions
 {
     /**

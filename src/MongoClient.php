@@ -182,9 +182,9 @@ class MongoClient
      * Selects a collection.
      *
      * Note: Since Mongo creates on the fly, this just returns
-     * a instances of self.
+     * an instances of self.
      */
-    public function selectDatabase(string $name): MongoClient
+    public function selectDatabase(): MongoClient
     {
         return $this;
     }
@@ -193,9 +193,9 @@ class MongoClient
      * Creates a collection.
      *
      * Note: Since Mongo creates on the fly, this just returns
-     * a instances of self.
+     * an instances of self.
      */
-    public function createDatabase(string $name): MongoClient
+    public function createDatabase(): MongoClient
     {
         return $this;
     }

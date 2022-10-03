@@ -25,43 +25,43 @@ class MongoTest extends TestCase
         );
 
         $client = new MongoClient($options, false);
+        $client->connect();
+
         self::$db = $client;
         return self::$db;
     }
 
-    public function testListDatabases()
-    {
-        $this->getDatabase()->listDatabaseNames();
-    }
-
     public function testDeleteDatabase()
     {
-        $this->getDatabase()->dropDatabase([]);
+        self::assertTrue(!!$this->getDatabase()->dropDatabase([]));
     }
 
     public function testCreateCollection()
     {
-        $this->getDatabase()->createCollection('movies');
+        self::assertTrue(!!$this->getDatabase()->createCollection('movies'));
+    }
+
+    public function testListDatabases()
+    {
+        self::assertCount(4, $this->getDatabase()->listDatabaseNames()->databases);
     }
 
     public function testCreateDocument()
     {
-        $this->getDatabase()->insert('movies', [
+        $doc = $this->getDatabase()->insert('movies', [
             'name' => 'Armageddon',
             'country' => 'USA',
             'language' => 'English'
             ]
         );
 
+        var_dump($doc['_id']);
+
         $this->getDatabase()->insert('movies', ['9 Monkeys']);
 
     }
 
 
-    public function testCreateExistsDelete()
-    {
-        var_dump($this->getDatabase()->selectDatabase());
 
-    }
 
 }

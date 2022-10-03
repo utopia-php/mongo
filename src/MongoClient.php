@@ -123,7 +123,6 @@ class MongoClient
     public function send(mixed $data): stdClass|array|int
     {
         $this->client->send($data);
-
         return $this->receive();
     }
 
@@ -282,6 +281,7 @@ class MongoClient
      */
     public function listCollectionNames(array $filter = [], array $options = []): stdClass
     {
+
         $qry = array_merge(
             [
                 "listCollections" => 1.0,

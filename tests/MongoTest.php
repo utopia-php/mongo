@@ -2,6 +2,7 @@
 
 namespace Utopia\Tests;
 
+use MongoDB\BSON\ObjectId;
 use PHPUnit\Framework\TestCase;
 use Utopia\Database\Query;
 use Utopia\Mongo\MongoClient;
@@ -59,9 +60,10 @@ class MongoTest extends TestCase
         self::assertEquals(24, strlen($id));
 
         $doc = $this->getDatabase()->find('movies', ['name' => 'Armageddon'])->cursor->firstBatch ?? [];
-        //todo:make this work search by id
-        //$doc = $this->getDatabase()->find('movies', ['_id' => 'ObjectId("'.$id.'") '])->cursor->firstBatch ?? [];
+        self::assertCount(1, $doc);
 
+        $doc = $this->getDatabase()->find('movies', ['_id' => new ObjectId($id)])->cursor->firstBatch ?? [];
+        self::assertCount(1, $doc);
 
         $doc = $this->getDatabase()->insert('movies', ['9 Monkeys']);
         $id = (string)$doc['_id'];

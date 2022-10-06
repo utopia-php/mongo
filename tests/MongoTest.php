@@ -54,10 +54,11 @@ class MongoTest extends TestCase
             'language' => 'English'
             ]
         );
+        self::assertEquals(24, strlen((string)$doc['_id']));
 
-        var_dump($doc['_id']);
 
-        $this->getDatabase()->insert('movies', ['9 Monkeys']);
+        $doc = $this->getDatabase()->insert('movies', ['9 Monkeys']);
+        self::assertEquals(24, strlen((string)$doc['_id']));
 
     }
 

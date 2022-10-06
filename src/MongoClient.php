@@ -95,7 +95,6 @@ class MongoClient
 
         $sections = BSON\fromPHP($params);
         $message = pack('V*', 21 + strlen($sections), $this->id, 0, 2013, 0) . "\0" . $sections;
-
         return $this->send($message);
     }
 
@@ -119,11 +118,15 @@ class MongoClient
      * Send a message to connection.
      *
      * @param mixed $data
+     * @return stdClass|array|int
+     * @throws DuplicateException
      */
     public function send(mixed $data): stdClass|array|int
     {
         $this->client->send($data);
-        return $this->receive();
+        $res = $this->receive();
+        //var_dump($res);
+        return $res;
     }
 
     /**

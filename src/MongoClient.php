@@ -498,7 +498,6 @@ class MongoClient
             ], $options)
         );
 
-
         return $result;
 
     }

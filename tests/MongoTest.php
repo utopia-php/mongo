@@ -3,6 +3,7 @@
 namespace Utopia\Tests;
 
 use PHPUnit\Framework\TestCase;
+use Utopia\Database\Query;
 use Utopia\Mongo\MongoClient;
 use Utopia\Mongo\MongoClientOptions;
 
@@ -54,11 +55,17 @@ class MongoTest extends TestCase
             'language' => 'English'
             ]
         );
-        self::assertEquals(24, strlen((string)$doc['_id']));
+        $id = (string)$doc['_id'];
+        self::assertEquals(24, strlen($id));
+
+        $doc = $this->getDatabase()->find('movies', ['name' => 'Armageddon'])->cursor->firstBatch ?? [];
+        //todo:make this work search by id
+        //$doc = $this->getDatabase()->find('movies', ['_id' => 'ObjectId("'.$id.'") '])->cursor->firstBatch ?? [];
 
 
         $doc = $this->getDatabase()->insert('movies', ['9 Monkeys']);
-        self::assertEquals(24, strlen((string)$doc['_id']));
+        $id = (string)$doc['_id'];
+        self::assertEquals(24, strlen($id));
 
     }
 

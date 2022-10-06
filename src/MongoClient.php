@@ -2,10 +2,11 @@
 
 namespace Utopia\Mongo;
 
+use Exception;
+use Mongo\Exception\Duplicate;
 use MongoDB\BSON;
 use Swoole\Client;
 use Swoole\Coroutine\Client as CoroutineClient;
-use Mongo\Exception\Duplicate as DuplicateException;
 use stdClass;
 
 class MongoClient
@@ -119,18 +120,18 @@ class MongoClient
      *
      * @param mixed $data
      * @return stdClass|array|int
-     * @throws DuplicateException
+     * @throws Exception
      */
     public function send(mixed $data): stdClass|array|int
     {
         $this->client->send($data);
-        $res = $this->receive();
-        //var_dump($res);
-        return $res;
+        return $this->receive();
     }
 
     /**
      * Receive a message from connection.
+     * @throws Duplicate
+     * @throws Exception
      */
     private function receive(): stdClass|array|int
     {
@@ -157,24 +158,23 @@ class MongoClient
         $result = BSON\toPHP(substr($res, 21, $responseLength - 21));
 
         if (property_exists($result, "writeErrors")) {
-            throw new DuplicateException($result->writeErrors[0]->errmsg);
+            throw new Duplicate($result->writeErrors[0]->errmsg);
         }
 
-        if (property_exists($result, "n") && $result->ok == 1) {
+        if (property_exists($result, "n") && $result->ok === 1.0) {
             return $result->n;
         }
 
-        if (property_exists($result, "nonce") && $result->ok == 1) {
+        if (property_exists($result, "nonce") && $result->ok === 1.0) {
             return $result;
         }
-
 
         if (property_exists($result, 'errmsg')) {
-            throw new \Exception($result->errmsg);
+            throw new Exception($result->errmsg);
         }
 
-        if ($result->ok == 1) {
-            return $result;
+        if ($result->ok === 1.0) {
+           return $result;
         }
 
         return $result->cursor->firstBatch;
@@ -219,15 +219,13 @@ class MongoClient
      *
      * @param array $options
      * @param string|null $db
-     * @return MongoClient
+     * @return bool
      */
-    public function dropDatabase(array $options = [], ?string $db = null): MongoClient
+    public function dropDatabase(array $options = [], ?string $db = null): bool
     {
         $db ??= $this->options->name;
-
-        $this->query(array_merge(["dropDatabase" => 1], $options), $db);
-
-        return $this;
+        $res = $this->query(array_merge(["dropDatabase" => 1], $options), $db);
+        return $res->ok === 1.0;
     }
 
     public function selectCollection($name): MongoClient
@@ -241,20 +239,22 @@ class MongoClient
      *
      * @param string $name
      * @param array $options
+     * @return bool
+     * @throws Duplicate
      */
-    public function createCollection(string $name, array $options = []): MongoClient
+    public function createCollection(string $name, array $options = []): bool
     {
         $list = $this->listCollectionNames(["name" => $name]);
 
         if (\count($list->cursor->firstBatch) > 0) {
-            return $this;
+            throw new Duplicate('Collection Exists');
         }
 
-        $this->query(array_merge([
+        $res = $this->query(array_merge([
             'create' => $name,
         ], $options));
 
-        return $this;
+        return $res->ok === 1.0;
     }
 
     /**
@@ -359,16 +359,17 @@ class MongoClient
      * https://docs.mongodb.com/manual/reference/command/insert/#mongodb-dbcommand-dbcmd.insert
      *
      * @param string $collection
-     * @param array $documents
+     * @param array $document
      * @param array $options
      *
      * @return array
+     * @throws Exception
      */
-    public function insert(string $collection, array $documents, array $options = []): array
+    public function insert(string $collection, array $document, array $options = []): array
     {
         $docObj = new stdClass();
 
-        foreach ($documents as $key => $value) {
+        foreach ($document as $key => $value) {
             if(\is_null($value)) continue;
 
             $docObj->{$key} = $value;
@@ -378,7 +379,6 @@ class MongoClient
             MongoCommand::INSERT => $collection,
             'documents' => [$docObj],
         ], $options));
-
 
         return $this->lastInsertedDocument($collection);
     }
@@ -415,11 +415,11 @@ class MongoClient
     public function update(string $collection, array $where = [], array $updates = [], array $options = []): MongoClient
     {
 
-        $clean_updates = [];
+        $cleanUpdates = [];
 
         foreach($updates as $k => $v) {
             if(\is_null($v)) continue;
-            $clean_updates[$k] = $v;
+            $cleanUpdates[$k] = $v;
         }
 
         $this->query(
@@ -428,7 +428,7 @@ class MongoClient
                 'updates' => [
                     [
                         'q' => $this->toObject($where),
-                        'u' => $this->toObject($clean_updates),
+                        'u' => $this->toObject($cleanUpdates),
                         'multi' => false,
                         'upsert' => false
                     ]
@@ -453,11 +453,11 @@ class MongoClient
 
     public function upsert(string $collection, array $where = [], array $updates = [], array $options = []): MongoClient
     {
-        $clean_updates = [];
+        $cleanUpdates = [];
 
         foreach($updates as $k => $v) {
             if(\is_null($v)) continue;
-            $clean_updates[$k] = $v;
+            $cleanUpdates[$k] = $v;
         }
 
 
@@ -468,7 +468,7 @@ class MongoClient
                     'updates' => [
                         [
                             'q' => ['_uid' => $where['_uid']],
-                            'u' => ['$set' => $clean_updates],
+                            'u' => ['$set' => $cleanUpdates],
                         ]
                     ],
                 ],

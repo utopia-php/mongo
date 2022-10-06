@@ -102,7 +102,8 @@ class MongoTest extends TestCase
         self::assertIsFloat($doc->float);
         self::assertIsInt($doc->integer);
         self::assertIsArray($doc->array);
-        self::assertIsObject($doc->date_object); // Todo: This is not working can'tretrive the object value
+        self::assertIsString($doc->date_string);
+        self::assertIsObject($doc->date_object); // Todo: This is not working can't retrieve the object back
 
     }
 

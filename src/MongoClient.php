@@ -3,11 +3,11 @@
 namespace Utopia\Mongo;
 
 use Exception;
-use Mongo\Exception\Duplicate;
 use MongoDB\BSON;
 use Swoole\Client;
 use Swoole\Coroutine\Client as CoroutineClient;
 use stdClass;
+use Utopia\Mongo\Exception\Duplicate;
 
 class MongoClient
 {

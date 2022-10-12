@@ -11,7 +11,7 @@ services:
     volumes:
       - ./:/usr/src/code
     ports:
-      - "8708:8708"
+      - "8882:8882"
 
   mongo:
     image: mongo:4.4
@@ -19,7 +19,7 @@ services:
     networks:
       - database
     ports:
-      - "8703:27017"
+      - "8881:27017"
     environment:
       MONGO_INITDB_ROOT_USERNAME: root
       MONGO_INITDB_ROOT_PASSWORD: example

@@ -39,8 +39,13 @@ class MongoTest extends TestCase
     }
 
 
+    /**
+     * @throws Duplicate
+     */
     public function testCreateCollection()
     {
+        self::assertTrue($this->getDatabase()->createCollection('movies'));
+        self::assertTrue($this->getDatabase()->dropCollection('movies'));
         self::assertTrue($this->getDatabase()->createCollection('movies'));
         self::expectException(Duplicate::class);
         self::assertTrue($this->getDatabase()->createCollection('movies'));

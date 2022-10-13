@@ -263,14 +263,15 @@ class MongoClient
      *
      * @param string $name
      * @param array $options
+     * @return bool
      */
-    public function dropCollection(string $name, array $options = []): MongoClient
+    public function dropCollection(string $name, array $options = []): bool
     {
-        $this->query(array_merge([
+        $res = $this->query(array_merge([
             'drop' => $name,
         ], $options));
 
-        return $this;
+        return $res->ok === 1.0;
     }
 
     /**

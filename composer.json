@@ -16,10 +16,10 @@
         }
     ],
     "autoload": {
-        "psr-4": {"Utopia\\Mongo\\": "src/Mongo"}
+        "psr-4": {"Utopia\\Mongo\\": "src"}
     },
     "autoload-dev": {
-        "psr-4": {"Utopia\\Tests\\": "tests/Mongo"}
+        "psr-4": {"Utopia\\Tests\\": "tests"}
     },
     "require": {
         "php": ">=8.0",
@@ -29,8 +29,6 @@
     "require-dev": {
         "fakerphp/faker": "^1.14",
         "phpunit/phpunit": "^9.4",
-        "swoole/ide-helper": "4.8.0",
-        "utopia-php/cli": "^0.11.0",
-        "vimeo/psalm": "4.0.1"
+        "swoole/ide-helper": "4.8.0"
     }
 }

@@ -376,6 +376,8 @@ class MongoClient
             $docObj->{$key} = $value;
         }
 
+        $docObj->_id ??= new BSON\ObjectId();
+
         $this->query(array_merge([
             MongoCommand::INSERT => $collection,
             'documents' => [$docObj],

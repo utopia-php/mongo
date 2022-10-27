@@ -19,15 +19,7 @@ Init in your application:
 ```php
 <?php
 
-$options = new ClientOptions(
-    'DatabaseName', // Default Database name
-    'mongo', // Container / ip / host
-    27017,
-    'root',
-    'example'
-);
-
-$client = new Client($options, false);
+$client = new Client('testing', 'mongo', 27017, 'root', 'example', false);
 $client->connect();
 
 // drop database

@@ -2,12 +2,10 @@
 
 namespace Utopia\Mongo;
 
-use Exception;
 use MongoDB\BSON;
 use Swoole\Client as SwooleClient;
 use Swoole\Coroutine\Client as CoroutineClient;
 use stdClass;
-use Utopia\Mongo\Exception\Duplicate;
 
 class Client
 {
@@ -172,7 +170,6 @@ class Client
 
     /**
      * Receive a message from connection.
-     * @throws Duplicate
      * @throws Exception
      */
     private function receive(): stdClass|array|int
@@ -200,7 +197,7 @@ class Client
         $result = BSON\toPHP(substr($res, 21, $responseLength - 21));
 
         if (property_exists($result, "writeErrors")) {
-            throw new Duplicate($result->writeErrors[0]->errmsg);
+            throw new Exception($result->writeErrors[0]->errmsg);
         }
 
         if (property_exists($result, "n") && $result->ok === 1.0) {
@@ -283,14 +280,14 @@ class Client
      * @param string $name
      * @param array $options
      * @return bool
-     * @throws Duplicate
+     * @throws Exception
      */
     public function createCollection(string $name, array $options = []): bool
     {
         $list = $this->listCollectionNames(["name" => $name]);
 
         if (\count($list->cursor->firstBatch) > 0) {
-            throw new Duplicate('Collection Exists');
+            throw new Exception('Collection Exists');
         }
 
         $res = $this->query(array_merge([

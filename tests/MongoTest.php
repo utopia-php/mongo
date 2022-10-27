@@ -2,11 +2,10 @@
 
 namespace Utopia\Tests;
 
-use Exception;
 use MongoDB\BSON\ObjectId;
 use PHPUnit\Framework\TestCase;
-use Utopia\Mongo\Exception\Duplicate;
 use Utopia\Mongo\Client;
+use Utopia\Mongo\Exception;
 
 class MongoTest extends TestCase
 {
@@ -35,14 +34,14 @@ class MongoTest extends TestCase
 
 
     /**
-     * @throws Duplicate
+     * @throws Exception
      */
     public function testCreateCollection()
     {
         self::assertTrue($this->getDatabase()->createCollection('movies'));
         self::assertTrue($this->getDatabase()->dropCollection('movies'));
         self::assertTrue($this->getDatabase()->createCollection('movies'));
-        self::expectException(Duplicate::class);
+        self::expectException(Exception::class);
         self::assertTrue($this->getDatabase()->createCollection('movies'));
     }
 

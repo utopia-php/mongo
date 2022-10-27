@@ -79,9 +79,8 @@ class MongoTest extends TestCase
             ]
         );
 
-        $id = 999;
         $doc = $this->getDatabase()->insert('movies', [
-                '_id' => $id,
+                '_id' => 999,
                 'array' => ['USA', 'UK', 'India'],
                 'language' => 'English',
                 'float' => 9.9,
@@ -92,19 +91,7 @@ class MongoTest extends TestCase
             ]
         );
 
-        $doc = $this->getDatabase()->insert('movies', [
-                '_id' => $id,
-                'array' => ['USA', 'UK', 'India'],
-                'language' => 'English',
-                'float' => 9.9,
-                'integer' => 9,
-                'is_open' => true,
-                'date_string' => (new \DateTime())->format('Y-m-d\TH:i:s.vP'),
-                'date_object' => new \DateTime()
-            ]
-        );
-
-        $doc = $this->getDatabase()->find('movies', ['_id' => $id])->cursor->firstBatch ?? [];
+        $doc = $this->getDatabase()->find('movies', ['_id' => 999])->cursor->firstBatch ?? [];
         $doc = $doc[0];
 
         self::assertTrue($doc->is_open);
@@ -113,6 +100,10 @@ class MongoTest extends TestCase
         self::assertIsArray($doc->array);
         self::assertIsString($doc->date_string);
         self::assertIsObject($doc->date_object); // Todo: This is not working can't retrieve the object back
+
+        self::expectException(Exception::class);
+        self::expectExceptionCode(11000);
+        $this->getDatabase()->insert('movies', ['_id' => 999, 'b' => 'Duplication']);
 
     }
 

@@ -2,6 +2,7 @@
 
 namespace Utopia\Tests;
 
+use Exception;
 use MongoDB\BSON\ObjectId;
 use PHPUnit\Framework\TestCase;
 use Utopia\Mongo\Exception\Duplicate;
@@ -11,6 +12,9 @@ class MongoTest extends TestCase
 {
     static ?Client $db = null;
 
+    /**
+     * @throws Exception
+     */
     static function getDatabase(): Client
     {
         if (!is_null(self::$db)) {
@@ -100,8 +104,5 @@ class MongoTest extends TestCase
         self::assertIsObject($doc->date_object); // Todo: This is not working can't retrieve the object back
 
     }
-
-
-
 
 }

@@ -4,7 +4,7 @@
 ![Total Downloads](https://img.shields.io/packagist/dt/utopia-php/mongo.svg)
 [![Discord](https://img.shields.io/discord/564160730845151244?label=discord)](https://appwrite.io/discord)
 
-Mongo Line Protocol Client is a simple and lite abstraction layer around a Mongo Database. 
+A non-blocking PHP client based on the line protocol for MongoDB. Designed to work well in async PHP environments like [Swoole](https://github.com/swoole/swoole-src) 
 This library is aiming to be as simple and easy to learn and use. 
 This library is maintained by the [Appwrite team](https://appwrite.io).
 

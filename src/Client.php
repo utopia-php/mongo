@@ -24,19 +24,20 @@ class Client
     /**
      * Defines commands Mongo uses over wire protocol.
      */
-    public const CREATE = "create";
-    public const DELETE = "delete";
-    public const FIND = "find";
-    public const FIND_AND_MODIFY = "findAndModify";
-    public const GET_LAST_ERROR = "getLastError";
-    public const GET_MORE = "getMore";
-    public const INSERT = "insert";
-    public const RESET_ERROR = "resetError";
-    public const UPDATE = "update";
-    public const COUNT = "count";
-    public const AGGREGATE = "aggregate";
-    public const DISTINCT = "distinct";
-    public const MAP_REDUCE = "mapReduce";
+
+    public const COMMAND_CREATE = "create";
+    public const COMMAND_DELETE = "delete";
+    public const COMMAND_FIND = "find";
+    public const COMMAND_FIND_AND_MODIFY = "findAndModify";
+    public const COMMAND_GET_LAST_ERROR = "getLastError";
+    public const COMMAND_GET_MORE = "getMore";
+    public const COMMAND_INSERT = "insert";
+    public const COMMAND_RESET_ERROR = "resetError";
+    public const COMMAND_UPDATE = "update";
+    public const COMMAND_COUNT = "count";
+    public const COMMAND_AGGREGATE = "aggregate";
+    public const COMMAND_DISTINCT = "distinct";
+    public const COMMAND_MAP_REDUCE = "mapReduce";
 
     /**
      * Authentication for connection
@@ -425,7 +426,7 @@ class Client
         $docObj->_id ??= new BSON\ObjectId();
 
         $this->query(array_merge([
-            self::INSERT => $collection,
+            self::COMMAND_INSERT => $collection,
             'documents' => [$docObj],
         ], $options));
 
@@ -433,11 +434,12 @@ class Client
     }
 
     /**
-     * Retreive the last inserted document.
+     * Retrieve the last inserted document.
      *
      * @param string $collection
      *
      * @return array
+     * @throws Exception
      */
 
     public function lastInsertedDocument(string $collection): array
@@ -474,7 +476,7 @@ class Client
 
         $this->query(
             array_merge([
-                self::UPDATE => $collection,
+                self::COMMAND_UPDATE => $collection,
                 'updates' => [
                     [
                         'q' => $this->toObject($where),
@@ -545,7 +547,7 @@ class Client
     {
         return $this->query(
             array_merge([
-                self::FIND => $collection,
+                self::COMMAND_FIND => $collection,
                 'filter' => $this->toObject($filters),
             ], $options)
         );
@@ -569,7 +571,7 @@ class Client
     {
         return $this->query(
             array_merge([
-                self::FIND_AND_MODIFY => $collection,
+                self::COMMAND_FIND_AND_MODIFY => $collection,
                 'filter' => $this->toObject($filters),
                 'remove' => $remove,
                 'update' => $update,
@@ -591,7 +593,7 @@ class Client
     public function getMore(int $cursorId, string $collection, int $batchSize = 25): stdClass
     {
         return $this->query([
-            self::GET_MORE => $cursorId,
+            self::COMMAND_GET_MORE => $cursorId,
             'collection' => $collection,
             'batchSize' => $batchSize
         ]);
@@ -615,7 +617,7 @@ class Client
         return $this->query(
             array_merge(
                 [
-                    self::DELETE => $collection,
+                    self::COMMAND_DELETE => $collection,
                     'deletes' => [
                         $this->toObject(
                             array_merge(
@@ -663,7 +665,7 @@ class Client
     public function aggregate(string $collection, array $pipeline): stdClass
     {
         return $this->query([
-            self::AGGREGATE => $collection,
+            self::COMMAND_AGGREGATE => $collection,
             'pipeline' => $pipeline,
             'cursor' => $this->toObject([]),
         ]);

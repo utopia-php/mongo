@@ -6,7 +6,6 @@ use MongoDB\BSON\ObjectId;
 use PHPUnit\Framework\TestCase;
 use Utopia\Mongo\Exception\Duplicate;
 use Utopia\Mongo\Client;
-use Utopia\Mongo\ClientOptions;
 
 class MongoTest extends TestCase
 {
@@ -18,15 +17,7 @@ class MongoTest extends TestCase
             return self::$db;
         }
 
-        $options = new ClientOptions(
-            'utopia_testing',
-            'mongo',
-            27017,
-            'root',
-            'example'
-        );
-
-        $client = new Client($options, false);
+        $client = new Client('testing', 'mongo', 27017, 'root', 'example', false);
         $client->connect();
 
         self::$db = $client;

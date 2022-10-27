@@ -17,11 +17,6 @@ class Client
     private string $id;
 
     /**
-     * Options for connection.
-     */
-    private ClientOptions $options;
-
-    /**
      * Socket (sync or async) client.
      */
     private SwooleClient|CoroutineClient $client;
@@ -49,34 +44,62 @@ class Client
     private Auth $auth;
 
     /**
+     * Default Database Name
+     */
+    private string $database;
+
+    /**
+     * Database $host
+     */
+    private string $host;
+
+    /**
+     * Database $port
+     */
+    private int $port;
+
+    /**
      * Create a Mongo connection.
-     * @param ClientOptions $options
+     * @param string $database
+     * @param string $host
+     * @param int $port
+     * @param string $user
+     * @param string $password
      * @param Boolean $useCoroutine
      */
-    public function __construct(ClientOptions $options, bool $useCoroutine = true)
-    {
+    public function __construct(
+        string $database,
+        string $host,
+        int $port,
+        string $user,
+        string $password,
+        bool $useCoroutine = true
+    ){
         $this->id = uniqid('utopia.mongo.client');
-        $this->options = $options;
+        $this->database = $database;
+        $this->host = $host;
+        $this->port = $port;
 
         $this->client = $useCoroutine
             ? new CoroutineClient(SWOOLE_SOCK_TCP | SWOOLE_KEEP)
             : new SwooleClient(SWOOLE_SOCK_TCP | SWOOLE_KEEP);
 
         $this->auth = new Auth([
-            'authcid' => $options->username,
-            'secret' => Auth::encodeCredentials($options->username, $options->password)
+            'authcid' => $user,
+            'secret' => Auth::encodeCredentials($user, $password)
         ]);
     }
 
     /**
      * Connect to Mongo using TCP/IP
      * and Wire Protocol.
+     * @throws Exception
      */
     public function connect(): self
     {
         if($this->client->isConnected()) return $this;
 
-        $this->client->connect($this->options->host, $this->options->port);
+        $this->client->connect($this->host, $this->port);
         [$payload, $db] = $this->auth->start();
 
         $res = $this->query($payload, $db);
@@ -109,7 +132,7 @@ class Client
     public function query(array $command, ?string $db = null): stdClass|array|int
     {
         $params = array_merge($command, [
-            '$db' => $db ?? $this->options->name,
+            '$db' => $db ?? $this->database,
         ]);
 
         $sections = BSON\fromPHP($params);
@@ -242,7 +265,7 @@ class Client
      */
     public function dropDatabase(array $options = [], ?string $db = null): bool
     {
-        $db ??= $this->options->name;
+        $db ??= $this->database;
         $res = $this->query(array_merge(["dropDatabase" => 1], $options), $db);
         return $res->ok === 1.0;
     }

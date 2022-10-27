@@ -2,7 +2,6 @@
 
 namespace Utopia\Mongo;
 
-use DateTime;
 use MongoDB\BSON;
 use Swoole\Client as SwooleClient;
 use Swoole\Coroutine\Client as CoroutineClient;

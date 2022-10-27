@@ -1,4 +1,4 @@
-# mongo client
+# Mongo Line Protocol Client
 
 [![Build Status](https://travis-ci.com/utopia-php/system.svg?branch=main)](https://travis-ci.com/utopia-php/mongo)
 ![Total Downloads](https://img.shields.io/packagist/dt/utopia-php/mongo.svg)

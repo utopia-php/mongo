@@ -72,7 +72,7 @@ class Client
      * Connect to Mongo using TCP/IP
      * and Wire Protocol.
      */
-    public function connect(): Client
+    public function connect(): self
     {
         if($this->client->isConnected()) return $this;
 
@@ -104,6 +104,7 @@ class Client
      * @param array $command
      * @param string|null $db
      * @return stdClass|array|int
+     * @throws Exception
      */
     public function query(array $command, ?string $db = null): stdClass|array|int
     {
@@ -117,7 +118,7 @@ class Client
     }
 
     /**
-     * Send a syncronous command to connection.
+     * Send a synchronous command to connection.
      */
     public function blocking(string $cmd): stdClass|array|int
     {
@@ -203,7 +204,7 @@ class Client
      * Note: Since Mongo creates on the fly, this just returns
      * an instances of self.
      */
-    public function selectDatabase(): Client
+    public function selectDatabase(): self
     {
         return $this;
     }
@@ -214,7 +215,7 @@ class Client
      * Note: Since Mongo creates on the fly, this just returns
      * an instances of self.
      */
-    public function createDatabase(): Client
+    public function createDatabase(): self
     {
         return $this;
     }
@@ -237,6 +238,7 @@ class Client
      * @param array $options
      * @param string|null $db
      * @return bool
+     * @throws Exception
      */
     public function dropDatabase(array $options = [], ?string $db = null): bool
     {
@@ -245,7 +247,7 @@ class Client
         return $res->ok === 1.0;
     }
 
-    public function selectCollection($name): Client
+    public function selectCollection($name): self
     {
         return $this;
     }
@@ -281,6 +283,7 @@ class Client
      * @param string $name
      * @param array $options
      * @return bool
+     * @throws Exception
      */
     public function dropCollection(string $name, array $options = []): bool
     {
@@ -299,6 +302,7 @@ class Client
      * @param array $options
      *
      * @return stdClass
+     * @throws Exception
      */
     public function listCollectionNames(array $filter = [], array $options = []): stdClass
     {
@@ -325,6 +329,7 @@ class Client
      * @param array $options
      *
      * @return boolean
+     * @throws Exception
      */
     public function createIndexes(string $collection, array $indexes, array $options = []): bool
     {
@@ -358,9 +363,10 @@ class Client
      * @param array $indexes
      * @param array $options
      *
-     * @return array
+     * @return Client
+     * @throws Exception
      */
-    public function dropIndexes(string $collection, array $indexes, array $options = []): Client
+    public function dropIndexes(string $collection, array $indexes, array $options = []): self
     {
         $this->query(
             array_merge([
@@ -431,8 +437,9 @@ class Client
      * @param array $options
      *
      * @return Client
+     * @throws Exception
      */
-    public function update(string $collection, array $where = [], array $updates = [], array $options = []): Client
+    public function update(string $collection, array $where = [], array $updates = [], array $options = []): self
     {
 
         $cleanUpdates = [];
@@ -469,9 +476,10 @@ class Client
      * @param array $options
      *
      * @return Client
+     * @throws Exception
      */
 
-    public function upsert(string $collection, array $where = [], array $updates = [], array $options = []): Client
+    public function upsert(string $collection, array $where = [], array $updates = [], array $options = []): self
     {
         $cleanUpdates = [];
 
@@ -508,6 +516,7 @@ class Client
      * @param array $options
      *
      * @return stdClass
+     * @throws Exception
      */
     public function find(string $collection, array $filters = [], array $options = []): stdClass
     {
@@ -531,6 +540,7 @@ class Client
      * @param array $options
      *
      * @return stdClass
+     * @throws Exception
      */
     public function findAndModify(string $collection, array $update, bool $remove = false, array $filters = [], array $options = []): stdClass
     {
@@ -553,6 +563,7 @@ class Client
      * @param int batchSize
      *
      * @return  stdClass
+     * @throws Exception
      */
     public function getMore(int $cursorId, string $collection, int $batchSize = 25): stdClass
     {
@@ -574,6 +585,7 @@ class Client
      * @param array $options
      *
      * @return int
+     * @throws Exception
      */
     public function delete(string $collection, array $filters = [], int $limit = 1, array $deleteOptions = [], array $options = []): int
     {
@@ -606,6 +618,7 @@ class Client
      * @param array $options
      *
      * @return int
+     * @throws Exception
      */
     public function count(string $collection, array $filters, array $options): int
     {
@@ -622,6 +635,7 @@ class Client
      * @param array $pipeline
      *
      * @return stdClass
+     * @throws Exception
      */
     public function aggregate(string $collection, array $pipeline): stdClass
     {

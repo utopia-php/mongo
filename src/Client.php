@@ -432,11 +432,11 @@ class Client
             'documents' => [$docObj],
         ], $options));
 
-        return $this->lastInsertedDocument($collection);
+        return $this->toArray($docObj);
     }
 
     /**
-     * Retrieve the last inserted document.
+     * Retrieve the last lastDocument
      *
      * @param string $collection
      *
@@ -444,7 +444,7 @@ class Client
      * @throws Exception
      */
 
-    public function lastInsertedDocument(string $collection): array
+    public function lastDocument(string $collection): array
     {
         $result = $this->find($collection, [], [
             'sort' => ['_id' => -1],

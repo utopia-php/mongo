@@ -2,6 +2,7 @@
 
 namespace Utopia\Mongo;
 
+use DateTime;
 use MongoDB\BSON;
 use Swoole\Client as SwooleClient;
 use Swoole\Coroutine\Client as CoroutineClient;
@@ -694,11 +695,10 @@ class Client
     /**
      * Convert an object (stdClass) to an assoc array.
      *
-     * @param stdClass|array|string|null $obj
-     *
+     * @param mixed $obj
      * @return array|null
      */
-    public function toArray(stdClass|array|string|null $obj): array|null
+    public function toArray(mixed $obj): ?array
     {
         if(\is_null($obj)) return null;
 

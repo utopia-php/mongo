@@ -4,7 +4,7 @@
 ![Total Downloads](https://img.shields.io/packagist/dt/utopia-php/mongo.svg)
 [![Discord](https://img.shields.io/discord/564160730845151244?label=discord)](https://appwrite.io/discord)
 
-Utopia WebSocket is a simple and lite abstraction layer around a Mongo Database. 
+Mongo Line Protocol Client is a simple and lite abstraction layer around a Mongo Database. 
 This library is aiming to be as simple and easy to learn and use. 
 This library is maintained by the [Appwrite team](https://appwrite.io).
 

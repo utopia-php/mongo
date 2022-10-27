@@ -27,6 +27,23 @@ class Client
     private SwooleClient|CoroutineClient $client;
 
     /**
+     * Defines commands Mongo uses over wire protocol.
+     */
+    public const CREATE = "create";
+    public const DELETE = "delete";
+    public const FIND = "find";
+    public const FIND_AND_MODIFY = "findAndModify";
+    public const GET_LAST_ERROR = "getLastError";
+    public const GET_MORE = "getMore";
+    public const INSERT = "insert";
+    public const RESET_ERROR = "resetError";
+    public const UPDATE = "update";
+    public const COUNT = "count";
+    public const AGGREGATE = "aggregate";
+    public const DISTINCT = "distinct";
+    public const MAP_REDUCE = "mapReduce";
+
+    /**
      * Authentication for connection
      */
     private Auth $auth;
@@ -379,7 +396,7 @@ class Client
         $docObj->_id ??= new BSON\ObjectId();
 
         $this->query(array_merge([
-            Command::INSERT => $collection,
+            self::INSERT => $collection,
             'documents' => [$docObj],
         ], $options));
 
@@ -427,7 +444,7 @@ class Client
 
         $this->query(
             array_merge([
-                Command::UPDATE => $collection,
+                self::UPDATE => $collection,
                 'updates' => [
                     [
                         'q' => $this->toObject($where),
@@ -494,14 +511,12 @@ class Client
      */
     public function find(string $collection, array $filters = [], array $options = []): stdClass
     {
-        $result =  $this->query(
+        return $this->query(
             array_merge([
-                Command::FIND => $collection,
+                self::FIND => $collection,
                 'filter' => $this->toObject($filters),
             ], $options)
         );
-
-        return $result;
 
     }
 
@@ -521,7 +536,7 @@ class Client
     {
         return $this->query(
             array_merge([
-                Command::FIND_AND_MODIFY => $collection,
+                self::FIND_AND_MODIFY => $collection,
                 'filter' => $this->toObject($filters),
                 'remove' => $remove,
                 'update' => $update,
@@ -542,7 +557,7 @@ class Client
     public function getMore(int $cursorId, string $collection, int $batchSize = 25): stdClass
     {
         return $this->query([
-            Command::GET_MORE => $cursorId,
+            self::GET_MORE => $cursorId,
             'collection' => $collection,
             'batchSize' => $batchSize
         ]);
@@ -565,7 +580,7 @@ class Client
         return $this->query(
             array_merge(
                 [
-                    Command::DELETE => $collection,
+                    self::DELETE => $collection,
                     'deletes' => [
                         $this->toObject(
                             array_merge(
@@ -611,7 +626,7 @@ class Client
     public function aggregate(string $collection, array $pipeline): stdClass
     {
         return $this->query([
-            Command::AGGREGATE => $collection,
+            self::AGGREGATE => $collection,
             'pipeline' => $pipeline,
             'cursor' => $this->toObject([]),
         ]);

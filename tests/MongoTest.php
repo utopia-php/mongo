@@ -92,6 +92,18 @@ class MongoTest extends TestCase
             ]
         );
 
+        $doc = $this->getDatabase()->insert('movies', [
+                '_id' => $id,
+                'array' => ['USA', 'UK', 'India'],
+                'language' => 'English',
+                'float' => 9.9,
+                'integer' => 9,
+                'is_open' => true,
+                'date_string' => (new \DateTime())->format('Y-m-d\TH:i:s.vP'),
+                'date_object' => new \DateTime()
+            ]
+        );
+
         $doc = $this->getDatabase()->find('movies', ['_id' => $id])->cursor->firstBatch ?? [];
         $doc = $doc[0];
 

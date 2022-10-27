@@ -197,7 +197,12 @@ class Client
         $result = BSON\toPHP(substr($res, 21, $responseLength - 21));
 
         if (property_exists($result, "writeErrors")) {
-            throw new Exception($result->writeErrors[0]->errmsg);
+            // Throws a Utopia\Mongo\Exception with Code Error
+
+            throw new Exception(
+                $result->writeErrors[0]->errmsg,
+                $result->writeErrors[0]->code
+            );
         }
 
         if (property_exists($result, "n") && $result->ok === 1.0) {

@@ -2,7 +2,7 @@
 
 namespace Utopia\Mongo;
 
-class MongoCommand
+class Command
 {
     /**
      * Defines commands Mongo uses over wire protocol.

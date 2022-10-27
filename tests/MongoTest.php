@@ -5,20 +5,20 @@ namespace Utopia\Tests;
 use MongoDB\BSON\ObjectId;
 use PHPUnit\Framework\TestCase;
 use Utopia\Mongo\Exception\Duplicate;
-use Utopia\Mongo\MongoClient;
-use Utopia\Mongo\MongoClientOptions;
+use Utopia\Mongo\Client;
+use Utopia\Mongo\ClientOptions;
 
 class MongoTest extends TestCase
 {
-    static ?MongoClient $db = null;
+    static ?Client $db = null;
 
-    static function getDatabase(): MongoClient
+    static function getDatabase(): Client
     {
         if (!is_null(self::$db)) {
             return self::$db;
         }
 
-        $options = new MongoClientOptions(
+        $options = new ClientOptions(
             'utopia_testing',
             'mongo',
             27017,
@@ -26,7 +26,7 @@ class MongoTest extends TestCase
             'example'
         );
 
-        $client = new MongoClient($options, false);
+        $client = new Client($options, false);
         $client->connect();
 
         self::$db = $client;

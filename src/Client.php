@@ -4,12 +4,12 @@ namespace Utopia\Mongo;
 
 use Exception;
 use MongoDB\BSON;
-use Swoole\Client;
+use Swoole\Client as SwooleClient;
 use Swoole\Coroutine\Client as CoroutineClient;
 use stdClass;
 use Utopia\Mongo\Exception\Duplicate;
 
-class MongoClient
+class Client
 {
     /**
      * Unique identifier for socket connection.
@@ -19,12 +19,12 @@ class MongoClient
     /**
      * Options for connection.
      */
-    private MongoClientOptions $options;
+    private ClientOptions $options;
 
     /**
      * Socket (sync or async) client.
      */
-    private Client|CoroutineClient $client;
+    private SwooleClient|CoroutineClient $client;
 
     /**
      * Authentication for connection
@@ -33,17 +33,17 @@ class MongoClient
 
     /**
      * Create a Mongo connection.
-     * @param MongoClientOptions $options
+     * @param ClientOptions $options
      * @param Boolean $useCoroutine
      */
-    public function __construct(MongoClientOptions $options, bool $useCoroutine = true)
+    public function __construct(ClientOptions $options, bool $useCoroutine = true)
     {
         $this->id = uniqid('utopia.mongo.client');
         $this->options = $options;
 
         $this->client = $useCoroutine
             ? new CoroutineClient(SWOOLE_SOCK_TCP | SWOOLE_KEEP)
-            : new Client(SWOOLE_SOCK_TCP | SWOOLE_KEEP);
+            : new SwooleClient(SWOOLE_SOCK_TCP | SWOOLE_KEEP);
 
         $this->auth = new Auth([
             'authcid' => $options->username,
@@ -55,7 +55,7 @@ class MongoClient
      * Connect to Mongo using TCP/IP
      * and Wire Protocol.
      */
-    public function connect(): MongoClient
+    public function connect(): Client
     {
         if($this->client->isConnected()) return $this;
 
@@ -186,7 +186,7 @@ class MongoClient
      * Note: Since Mongo creates on the fly, this just returns
      * an instances of self.
      */
-    public function selectDatabase(): MongoClient
+    public function selectDatabase(): Client
     {
         return $this;
     }
@@ -197,7 +197,7 @@ class MongoClient
      * Note: Since Mongo creates on the fly, this just returns
      * an instances of self.
      */
-    public function createDatabase(): MongoClient
+    public function createDatabase(): Client
     {
         return $this;
     }
@@ -228,7 +228,7 @@ class MongoClient
         return $res->ok === 1.0;
     }
 
-    public function selectCollection($name): MongoClient
+    public function selectCollection($name): Client
     {
         return $this;
     }
@@ -343,7 +343,7 @@ class MongoClient
      *
      * @return array
      */
-    public function dropIndexes(string $collection, array $indexes, array $options = []): MongoClient
+    public function dropIndexes(string $collection, array $indexes, array $options = []): Client
     {
         $this->query(
             array_merge([
@@ -379,7 +379,7 @@ class MongoClient
         $docObj->_id ??= new BSON\ObjectId();
 
         $this->query(array_merge([
-            MongoCommand::INSERT => $collection,
+            Command::INSERT => $collection,
             'documents' => [$docObj],
         ], $options));
 
@@ -413,9 +413,9 @@ class MongoClient
      * @param array $updates
      * @param array $options
      *
-     * @return MongoClient
+     * @return Client
      */
-    public function update(string $collection, array $where = [], array $updates = [], array $options = []): MongoClient
+    public function update(string $collection, array $where = [], array $updates = [], array $options = []): Client
     {
 
         $cleanUpdates = [];
@@ -427,7 +427,7 @@ class MongoClient
 
         $this->query(
             array_merge([
-                MongoCommand::UPDATE => $collection,
+                Command::UPDATE => $collection,
                 'updates' => [
                     [
                         'q' => $this->toObject($where),
@@ -451,10 +451,10 @@ class MongoClient
      * @param array $updates
      * @param array $options
      *
-     * @return MongoClient
+     * @return Client
      */
 
-    public function upsert(string $collection, array $where = [], array $updates = [], array $options = []): MongoClient
+    public function upsert(string $collection, array $where = [], array $updates = [], array $options = []): Client
     {
         $cleanUpdates = [];
 
@@ -496,7 +496,7 @@ class MongoClient
     {
         $result =  $this->query(
             array_merge([
-                MongoCommand::FIND => $collection,
+                Command::FIND => $collection,
                 'filter' => $this->toObject($filters),
             ], $options)
         );
@@ -515,20 +515,18 @@ class MongoClient
      * @param array $filters
      * @param array $options
      *
-     * @return array
+     * @return stdClass
      */
     public function findAndModify(string $collection, array $update, bool $remove = false, array $filters = [], array $options = []): stdClass
     {
-        $result = $this->query(
+        return $this->query(
             array_merge([
-                MongoCommand::FIND_AND_MODIFY => $collection,
+                Command::FIND_AND_MODIFY => $collection,
                 'filter' => $this->toObject($filters),
                 'remove' => $remove,
                 'update' => $update,
             ], $options)
         );
-
-        return $result;
     }
 
     /**
@@ -544,7 +542,7 @@ class MongoClient
     public function getMore(int $cursorId, string $collection, int $batchSize = 25): stdClass
     {
         return $this->query([
-            MongoCommand::GET_MORE => $cursorId,
+            Command::GET_MORE => $cursorId,
             'collection' => $collection,
             'batchSize' => $batchSize
         ]);
@@ -567,7 +565,7 @@ class MongoClient
         return $this->query(
             array_merge(
                 [
-                    MongoCommand::DELETE => $collection,
+                    Command::DELETE => $collection,
                     'deletes' => [
                         $this->toObject(
                             array_merge(
@@ -612,13 +610,11 @@ class MongoClient
      */
     public function aggregate(string $collection, array $pipeline): stdClass
     {
-        $result = $this->query([
-            MongoCommand::AGGREGATE => $collection,
+        return $this->query([
+            Command::AGGREGATE => $collection,
             'pipeline' => $pipeline,
             'cursor' => $this->toObject([]),
         ]);
-
-        return $result;
     }
 
     /**

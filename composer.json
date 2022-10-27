@@ -21,6 +21,12 @@
     "autoload-dev": {
         "psr-4": {"Utopia\\Tests\\": "tests"}
     },
+    "scripts":{
+        "test": "phpunit",
+        "analyse": "vendor/bin/phpstan analyse",
+        "format": "vendor/bin/pint",
+        "lint": "vendor/bin/pint --test"
+    },
     "require": {
         "php": ">=8.0",
         "ext-mongodb": "*",

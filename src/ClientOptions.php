@@ -2,7 +2,7 @@
 
 namespace Utopia\Mongo;
 
-class MongoClientOptions
+class ClientOptions
 {
     /**
      * Creates an object that contains the connection

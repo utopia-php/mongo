@@ -685,7 +685,7 @@ class Client
         $obj = new stdClass();
 
         foreach ($dict as $k => $v) {
-            $obj->{$k} = $v;
+            $obj->{$k} = is_array($v) ? $this->toObject($v) : $v;
         }
 
         return $obj;

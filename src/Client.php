@@ -716,7 +716,7 @@ class Client
     }
 
     private function cleanFilters($filters):array {
-        $cleanFilters = [];
+        $cleanedFilters = [];
         
         foreach($filters as $k => $v) {
             $value = $v;

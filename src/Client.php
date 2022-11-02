@@ -548,7 +548,7 @@ class Client
     public function find(string $collection, array $filters = [], array $options = []): stdClass
     {
         $filters = $this->cleanFilters($filters);
-        
+
         return $this->query(
             array_merge([
                 self::COMMAND_FIND => $collection,
@@ -716,6 +716,8 @@ class Client
     }
 
     private function cleanFilters($filters):array {
+        $cleanFilters = [];
+        
         foreach($filters as $k => $v) {
             $value = $v;
 

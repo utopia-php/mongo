@@ -21,7 +21,7 @@ class MongoTest extends TestCase
             return self::$db;
         }
 
-        $client = new Client('testing', 'mongo', 27017, 'root', 'example', false);
+        $client = new Client('testing', 'mongo', 27017, 'root', 'example', true);
         $client->connect();
 
         self::$db = $client;

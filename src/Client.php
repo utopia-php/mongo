@@ -17,7 +17,7 @@ class Client
     /**
      * Socket (sync or async) client.
      */
-    private SwooleClient|CoroutineClient $client;
+    private Adapter $client;
 
     /**
      * Defines commands Mongo uses over wire protocol.
@@ -72,16 +72,13 @@ class Client
         int $port,
         string $user,
         string $password,
-        bool $useCoroutine = true
+        Adapter $adapter
     ){
         $this->id = uniqid('utopia.mongo.client');
         $this->database = $database;
         $this->host = $host;
         $this->port = $port;
-
-        $this->client = $useCoroutine
-            ? new CoroutineClient(SWOOLE_SOCK_TCP | SWOOLE_KEEP)
-            : new SwooleClient(SWOOLE_SOCK_TCP | SWOOLE_KEEP);
+        $this->client = $adapter;
 
         $this->auth = new Auth([
             'authcid' => $user,

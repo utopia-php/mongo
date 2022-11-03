@@ -17,7 +17,7 @@ class Client
     /**
      * Socket (sync or async) client.
      */
-    private Adapter $client;
+    private SwooleClient|CoroutineClient $client;
 
     /**
      * Defines commands Mongo uses over wire protocol.
@@ -72,13 +72,16 @@ class Client
         int $port,
         string $user,
         string $password,
-        Adapter $adapter
+        bool $useCoroutine = true
     ){
         $this->id = uniqid('utopia.mongo.client');
         $this->database = $database;
         $this->host = $host;
         $this->port = $port;
-        $this->client = $adapter;
+
+        $this->client = $useCoroutine
+            ? new CoroutineClient(SWOOLE_SOCK_TCP | SWOOLE_KEEP)
+            : new SwooleClient(SWOOLE_SOCK_TCP | SWOOLE_KEEP);
 
         $this->auth = new Auth([
             'authcid' => $user,
@@ -215,7 +218,7 @@ class Client
         }
 
         if ($result->ok === 1.0) {
-           return $result;
+            return $result;
         }
 
         return $result->cursor->firstBatch;
@@ -714,13 +717,13 @@ class Client
 
     private function cleanFilters($filters):array {
         $cleanedFilters = [];
-        
+
         foreach($filters as $k => $v) {
             $value = $v;
 
             if(in_array($k, ['$and', '$or', '$nor']) && is_array($v)) {
                 $values = [];
-                
+
                 foreach($v as $item) {
                     if(is_null($item)) continue;
 

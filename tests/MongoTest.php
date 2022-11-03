@@ -4,6 +4,7 @@ namespace Utopia\Tests;
 
 use MongoDB\BSON\ObjectId;
 use PHPUnit\Framework\TestCase;
+use Utopia\Mongo\Adapter\SwooleClient;
 use Utopia\Mongo\Client;
 use Utopia\Mongo\Exception;
 

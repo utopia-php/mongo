@@ -21,8 +21,7 @@ class MongoTest extends TestCase
             return self::$db;
         }
 
-        // todo: revert true to false
-        $client = new Client('testing', 'mongo', 27017, 'root', 'example', true);
+        $client = new Client('testing', 'mongo', 27017, 'root', 'example', false);
         $client->connect();
 
         self::$db = $client;

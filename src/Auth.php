@@ -15,14 +15,15 @@ class Auth
     private string $saltedPassword;
     private string $authMessage;
 
+    /**
+     * @throws \Exception
+     */
     public function __construct(array $options)
     {
-        $this->authcid = isset($options['authcid']) ? $options['authcid'] : '';
-        $this->secret = isset($options['secret']) ? $options['secret'] : '';
-        $this->authzid = isset($options['authzid']) ? $options['authzid'] : '';
-        $this->service = isset($options['service']) ? $options['service'] : '';
-
-        $this->nonce = base64_encode(random_bytes(32));
+        $this->authcid = $options['authcid'] ?? '';
+        $this->secret = $options['secret'] ?? '';
+        $this->authzid = $options['authzid'] ?? '';
+        $this->cnonce = base64_encode(random_bytes(32));
     }
 
     public function start(): array
@@ -65,10 +66,10 @@ class Auth
     }
 
     /**
-     * @param mixed $challenge
-     * @return string
+     * @param mixed|null $challenge
+     * @return string|bool
      */
-    public function createResponse($challenge = null): string
+    public function createResponse(mixed $challenge = null): string|bool
     {
         $authcid = $this->formatName($this->authcid);
         if (empty($authcid)) {
@@ -156,11 +157,11 @@ class Auth
         $finalMessage         = $channelBinding . ',r=' . $nonce;
         $saltedPassword       = $this->hi($password, $salt, $i);
         $this->saltedPassword = $saltedPassword;
-        $clientKey            = $this->hmac($saltedPassword, "Client Key", true);
-        $storedKey            = $this->hash($clientKey, true);
+        $clientKey            = $this->hmac($saltedPassword, "Client Key");
+        $storedKey            = $this->hash($clientKey);
         $authMessage          = $this->firstMessageBare . ',' . $challenge . ',' . $finalMessage;
         $this->authMessage    = $authMessage;
-        $clientSignature      = $this->hmac($storedKey, $authMessage, true);
+        $clientSignature      = $this->hmac($storedKey, $authMessage);
         $clientProof          = $clientKey ^ $clientSignature;
         $proof                = ',p=' . base64_encode($clientProof);
 
@@ -178,10 +179,10 @@ class Auth
     private function hi(string $str, string $salt, int $i): string
     {
         $int1   = "\0\0\0\1";
-        $ui     = $this->hmac($str, $salt . $int1, true);
+        $ui     = $this->hmac($str, $salt . $int1);
         $result = $ui;
         for ($k = 1; $k < $i; $k++) {
-            $ui     = $this->hmac($str, $ui, true);
+            $ui     = $this->hmac($str, $ui);
             $result = $result ^ $ui;
         }
         return $result;
@@ -208,8 +209,8 @@ class Auth
 
         $verifier                = $matches[1];
         $proposedServerSignature = base64_decode($verifier);
-        $serverKey               = $this->hmac($this->saltedPassword, "Server Key", true);
-        $serverSignature         = $this->hmac($serverKey, $this->authMessage, true);
+        $serverKey               = $this->hmac($this->saltedPassword, "Server Key");
+        $serverSignature         = $this->hmac($serverKey, $this->authMessage);
 
         return $proposedServerSignature === $serverSignature;
     }
@@ -239,14 +240,7 @@ class Auth
     }
 
     /**
-     * @return string
-     */
-    public function getHashAlgo(): string
-    {
-        return $this->hashAlgo;
-    }
-
-    /**
+     * @param $data
      * @return string
      */
     private function hash($data): string
@@ -255,11 +249,13 @@ class Auth
     }
 
     /**
+     * @param $key
+     * @param $str
      * @return string
      */
-    private function hmac($key, $str, $raw): string
+    private function hmac($key, $str): string
     {
-        return hash_hmac('sha1', $str, $key, $raw);
+        return hash_hmac('sha1', $str, $key, true);
     }
 
     /**

@@ -125,7 +125,7 @@ class Client
     /**
      * Send a BSON packed query to connection.
      *
-     * @param array $command
+     * @param array<string, mixed> $command
      * @param string|null $db
      * @return stdClass|array|int
      * @throws Exception
@@ -196,6 +196,9 @@ class Client
             (!isset($responseLength)) || ($receivedLength < $responseLength)
         );
 
+        /**
+         * @var stdClass $result
+         */
         $result = BSON\toPHP(substr($res, 21, $responseLength - 21));
 
         if (property_exists($result, "writeErrors")) {
@@ -594,8 +597,7 @@ class Client
      *
      * @param int $cursorId
      * @param string $collection
-     * @param int batchSize
-     *
+     * @param int $batchSize
      * @return  stdClass
      * @throws Exception
      */

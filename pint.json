@@ -1,6 +1,3 @@
 {
-  "preset": "psr12",
-  "exclude": [
-    "tests/"
-  ]
+  "preset": "psr12"
 }

@@ -4,18 +4,17 @@ namespace Utopia\Tests;
 
 use MongoDB\BSON\ObjectId;
 use PHPUnit\Framework\TestCase;
-use Utopia\Mongo\Adapter\SwooleClient;
 use Utopia\Mongo\Client;
 use Utopia\Mongo\Exception;
 
 class MongoTest extends TestCase
 {
-    static ?Client $db = null;
+    public static ?Client $db = null;
 
     /**
      * @throws Exception
      */
-    static function getDatabase(): Client
+    public static function getDatabase(): Client
     {
         if (!is_null(self::$db)) {
             return self::$db;
@@ -53,7 +52,9 @@ class MongoTest extends TestCase
 
     public function testCreateDocument()
     {
-        $doc = $this->getDatabase()->insert('movies', [
+        $doc = $this->getDatabase()->insert(
+            'movies',
+            [
             'name' => 'Armageddon',
             'country' => 'USA',
             'language' => 'English'
@@ -73,14 +74,18 @@ class MongoTest extends TestCase
         $id = (string)$doc['_id'];
         self::assertEquals(24, strlen($id));
 
-        $doc = $this->getDatabase()->insert('movies', [
+        $doc = $this->getDatabase()->insert(
+            'movies',
+            [
                 'name' => 300,
                 'country' => 'USA',
                 'language' => 'English'
             ]
         );
 
-        $doc = $this->getDatabase()->insert('movies', [
+        $doc = $this->getDatabase()->insert(
+            'movies',
+            [
                 '_id' => 999,
                 'array' => ['USA', 'UK', 'India'],
                 'language' => 'English',
@@ -105,7 +110,5 @@ class MongoTest extends TestCase
         self::expectException(Exception::class);
         self::expectExceptionCode(11000);
         $this->getDatabase()->insert('movies', ['_id' => 999, 'b' => 'Duplication']);
-
     }
-
 }

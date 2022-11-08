@@ -6,7 +6,6 @@ use Utopia\Mongo\Adapter;
 
 class SwooleCoroutineClient extends Adapter
 {
-
     public function isConnected(): bool
     {
         // TODO: Implement isConnected() method.

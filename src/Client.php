@@ -73,7 +73,7 @@ class Client
         string $user,
         string $password,
         bool $useCoroutine = true
-    ){
+    ) {
         $this->id = uniqid('utopia.mongo.client');
         $this->database = $database;
         $this->host = $host;
@@ -96,7 +96,9 @@ class Client
      */
     public function connect(): self
     {
-        if($this->client->isConnected()) return $this;
+        if ($this->client->isConnected()) {
+            return $this;
+        }
 
         $this->client->connect($this->host, $this->port);
         [$payload, $db] = $this->auth->start();
@@ -332,7 +334,6 @@ class Client
      */
     public function listCollectionNames(array $filter = [], array $options = []): stdClass
     {
-
         $qry = array_merge(
             [
                 "listCollections" => 1.0,
@@ -420,7 +421,9 @@ class Client
         $docObj = new stdClass();
 
         foreach ($document as $key => $value) {
-            if(\is_null($value)) continue;
+            if (\is_null($value)) {
+                continue;
+            }
 
             $docObj->{$key} = $value;
         }
@@ -468,11 +471,12 @@ class Client
      */
     public function update(string $collection, array $where = [], array $updates = [], array $options = []): self
     {
-
         $cleanUpdates = [];
 
-        foreach($updates as $k => $v) {
-            if(\is_null($v)) continue;
+        foreach ($updates as $k => $v) {
+            if (\is_null($v)) {
+                continue;
+            }
             $cleanUpdates[$k] = $v;
         }
 
@@ -510,8 +514,10 @@ class Client
     {
         $cleanUpdates = [];
 
-        foreach($updates as $k => $v) {
-            if(\is_null($v)) continue;
+        foreach ($updates as $k => $v) {
+            if (\is_null($v)) {
+                continue;
+            }
             $cleanUpdates[$k] = $v;
         }
 
@@ -555,7 +561,6 @@ class Client
                 'filter' => $this->toObject($filters),
             ], $options)
         );
-
     }
 
     /**
@@ -701,7 +706,9 @@ class Client
      */
     public function toArray(mixed $obj): ?array
     {
-        if(\is_null($obj)) return null;
+        if (\is_null($obj)) {
+            return null;
+        }
 
         if (is_object($obj) || is_array($obj)) {
             $ret = (array) $obj;
@@ -715,17 +722,20 @@ class Client
         return [$obj];
     }
 
-    private function cleanFilters($filters):array {
+    private function cleanFilters($filters): array
+    {
         $cleanedFilters = [];
 
-        foreach($filters as $k => $v) {
+        foreach ($filters as $k => $v) {
             $value = $v;
 
-            if(in_array($k, ['$and', '$or', '$nor']) && is_array($v)) {
+            if (in_array($k, ['$and', '$or', '$nor']) && is_array($v)) {
                 $values = [];
 
-                foreach($v as $item) {
-                    if(is_null($item)) continue;
+                foreach ($v as $item) {
+                    if (is_null($item)) {
+                        continue;
+                    }
 
                     $values[] = is_array($item) ? $this->toObject($item) : $item;
                 }

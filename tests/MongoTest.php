@@ -4,29 +4,23 @@ namespace Utopia\Tests;
 
 use MongoDB\BSON\ObjectId;
 use PHPUnit\Framework\TestCase;
-use Utopia\Mongo\Exception\Duplicate;
-use Utopia\Mongo\MongoClient;
-use Utopia\Mongo\MongoClientOptions;
+use Utopia\Mongo\Client;
+use Utopia\Mongo\Exception;
 
 class MongoTest extends TestCase
 {
-    static ?MongoClient $db = null;
+    public static ?Client $db = null;
 
-    static function getDatabase(): MongoClient
+    /**
+     * @throws Exception
+     */
+    public static function getDatabase(): Client
     {
         if (!is_null(self::$db)) {
             return self::$db;
         }
 
-        $options = new MongoClientOptions(
-            'utopia_testing',
-            'mongo',
-            27017,
-            'root',
-            'example'
-        );
-
-        $client = new MongoClient($options, false);
+        $client = new Client('testing', 'mongo', 27017, 'root', 'example', false);
         $client->connect();
 
         self::$db = $client;
@@ -40,14 +34,14 @@ class MongoTest extends TestCase
 
 
     /**
-     * @throws Duplicate
+     * @throws Exception
      */
     public function testCreateCollection()
     {
         self::assertTrue($this->getDatabase()->createCollection('movies'));
         self::assertTrue($this->getDatabase()->dropCollection('movies'));
         self::assertTrue($this->getDatabase()->createCollection('movies'));
-        self::expectException(Duplicate::class);
+        self::expectException(Exception::class);
         self::assertTrue($this->getDatabase()->createCollection('movies'));
     }
 
@@ -58,7 +52,9 @@ class MongoTest extends TestCase
 
     public function testCreateDocument()
     {
-        $doc = $this->getDatabase()->insert('movies', [
+        $doc = $this->getDatabase()->insert(
+            'movies',
+            [
             'name' => 'Armageddon',
             'country' => 'USA',
             'language' => 'English'
@@ -78,16 +74,19 @@ class MongoTest extends TestCase
         $id = (string)$doc['_id'];
         self::assertEquals(24, strlen($id));
 
-        $doc = $this->getDatabase()->insert('movies', [
+        $doc = $this->getDatabase()->insert(
+            'movies',
+            [
                 'name' => 300,
                 'country' => 'USA',
                 'language' => 'English'
             ]
         );
 
-        $id = 999;
-        $doc = $this->getDatabase()->insert('movies', [
-                '_id' => $id,
+        $doc = $this->getDatabase()->insert(
+            'movies',
+            [
+                '_id' => 999,
                 'array' => ['USA', 'UK', 'India'],
                 'language' => 'English',
                 'float' => 9.9,
@@ -98,7 +97,7 @@ class MongoTest extends TestCase
             ]
         );
 
-        $doc = $this->getDatabase()->find('movies', ['_id' => $id])->cursor->firstBatch ?? [];
+        $doc = $this->getDatabase()->find('movies', ['_id' => 999])->cursor->firstBatch ?? [];
         $doc = $doc[0];
 
         self::assertTrue($doc->is_open);
@@ -108,9 +107,8 @@ class MongoTest extends TestCase
         self::assertIsString($doc->date_string);
         self::assertIsObject($doc->date_object); // Todo: This is not working can't retrieve the object back
 
+        self::expectException(Exception::class);
+        self::expectExceptionCode(11000);
+        $this->getDatabase()->insert('movies', ['_id' => 999, 'b' => 'Duplication']);
     }
-
-
-
-
 }

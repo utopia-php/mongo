@@ -2,14 +2,12 @@
 
 namespace Utopia\Mongo;
 
-use Exception;
 use MongoDB\BSON;
-use Swoole\Client;
+use Swoole\Client as SwooleClient;
 use Swoole\Coroutine\Client as CoroutineClient;
 use stdClass;
-use Utopia\Mongo\Exception\Duplicate;
 
-class MongoClient
+class Client
 {
     /**
      * Unique identifier for socket connection.
@@ -17,14 +15,27 @@ class MongoClient
     private string $id;
 
     /**
-     * Options for connection.
-     */
-    private MongoClientOptions $options;
-
-    /**
      * Socket (sync or async) client.
      */
-    private Client|CoroutineClient $client;
+    private SwooleClient|CoroutineClient $client;
+
+    /**
+     * Defines commands Mongo uses over wire protocol.
+     */
+
+    public const COMMAND_CREATE = "create";
+    public const COMMAND_DELETE = "delete";
+    public const COMMAND_FIND = "find";
+    public const COMMAND_FIND_AND_MODIFY = "findAndModify";
+    public const COMMAND_GET_LAST_ERROR = "getLastError";
+    public const COMMAND_GET_MORE = "getMore";
+    public const COMMAND_INSERT = "insert";
+    public const COMMAND_RESET_ERROR = "resetError";
+    public const COMMAND_UPDATE = "update";
+    public const COMMAND_COUNT = "count";
+    public const COMMAND_AGGREGATE = "aggregate";
+    public const COMMAND_DISTINCT = "distinct";
+    public const COMMAND_MAP_REDUCE = "mapReduce";
 
     /**
      * Authentication for connection
@@ -32,34 +43,64 @@ class MongoClient
     private Auth $auth;
 
     /**
+     * Default Database Name
+     */
+    private string $database;
+
+    /**
+     * Database $host
+     */
+    private string $host;
+
+    /**
+     * Database $port
+     */
+    private int $port;
+
+    /**
      * Create a Mongo connection.
-     * @param MongoClientOptions $options
+     * @param string $database
+     * @param string $host
+     * @param int $port
+     * @param string $user
+     * @param string $password
      * @param Boolean $useCoroutine
      */
-    public function __construct(MongoClientOptions $options, bool $useCoroutine = true)
-    {
+    public function __construct(
+        string $database,
+        string $host,
+        int $port,
+        string $user,
+        string $password,
+        bool $useCoroutine = true
+    ) {
         $this->id = uniqid('utopia.mongo.client');
-        $this->options = $options;
+        $this->database = $database;
+        $this->host = $host;
+        $this->port = $port;
 
         $this->client = $useCoroutine
             ? new CoroutineClient(SWOOLE_SOCK_TCP | SWOOLE_KEEP)
-            : new Client(SWOOLE_SOCK_TCP | SWOOLE_KEEP);
+            : new SwooleClient(SWOOLE_SOCK_TCP | SWOOLE_KEEP);
 
         $this->auth = new Auth([
-            'authcid' => $options->username,
-            'secret' => Auth::encodeCredentials($options->username, $options->password)
+            'authcid' => $user,
+            'secret' => Auth::encodeCredentials($user, $password)
         ]);
     }
 
     /**
      * Connect to Mongo using TCP/IP
      * and Wire Protocol.
+     * @throws Exception
      */
-    public function connect(): MongoClient
+    public function connect(): self
     {
-        if($this->client->isConnected()) return $this;
+        if ($this->client->isConnected()) {
+            return $this;
+        }
 
-        $this->client->connect($this->options->host, $this->options->port);
+        $this->client->connect($this->host, $this->port);
         [$payload, $db] = $this->auth->start();
 
         $res = $this->query($payload, $db);
@@ -84,14 +125,15 @@ class MongoClient
     /**
      * Send a BSON packed query to connection.
      *
-     * @param array $command
+     * @param array<string, mixed> $command
      * @param string|null $db
      * @return stdClass|array|int
+     * @throws Exception
      */
     public function query(array $command, ?string $db = null): stdClass|array|int
     {
         $params = array_merge($command, [
-            '$db' => $db ?? $this->options->name,
+            '$db' => $db ?? $this->database,
         ]);
 
         $sections = BSON\fromPHP($params);
@@ -100,7 +142,7 @@ class MongoClient
     }
 
     /**
-     * Send a syncronous command to connection.
+     * Send a synchronous command to connection.
      */
     public function blocking(string $cmd): stdClass|array|int
     {
@@ -130,7 +172,6 @@ class MongoClient
 
     /**
      * Receive a message from connection.
-     * @throws Duplicate
      * @throws Exception
      */
     private function receive(): stdClass|array|int
@@ -155,10 +196,18 @@ class MongoClient
             (!isset($responseLength)) || ($receivedLength < $responseLength)
         );
 
+        /**
+         * @var stdClass $result
+         */
         $result = BSON\toPHP(substr($res, 21, $responseLength - 21));
 
         if (property_exists($result, "writeErrors")) {
-            throw new Duplicate($result->writeErrors[0]->errmsg);
+            // Throws a Utopia\Mongo\Exception with Code Error
+
+            throw new Exception(
+                $result->writeErrors[0]->errmsg,
+                $result->writeErrors[0]->code
+            );
         }
 
         if (property_exists($result, "n") && $result->ok === 1.0) {
@@ -174,7 +223,7 @@ class MongoClient
         }
 
         if ($result->ok === 1.0) {
-           return $result;
+            return $result;
         }
 
         return $result->cursor->firstBatch;
@@ -186,7 +235,7 @@ class MongoClient
      * Note: Since Mongo creates on the fly, this just returns
      * an instances of self.
      */
-    public function selectDatabase(): MongoClient
+    public function selectDatabase(): self
     {
         return $this;
     }
@@ -197,7 +246,7 @@ class MongoClient
      * Note: Since Mongo creates on the fly, this just returns
      * an instances of self.
      */
-    public function createDatabase(): MongoClient
+    public function createDatabase(): self
     {
         return $this;
     }
@@ -220,15 +269,16 @@ class MongoClient
      * @param array $options
      * @param string|null $db
      * @return bool
+     * @throws Exception
      */
     public function dropDatabase(array $options = [], ?string $db = null): bool
     {
-        $db ??= $this->options->name;
+        $db ??= $this->database;
         $res = $this->query(array_merge(["dropDatabase" => 1], $options), $db);
         return $res->ok === 1.0;
     }
 
-    public function selectCollection($name): MongoClient
+    public function selectCollection($name): self
     {
         return $this;
     }
@@ -240,14 +290,14 @@ class MongoClient
      * @param string $name
      * @param array $options
      * @return bool
-     * @throws Duplicate
+     * @throws Exception
      */
     public function createCollection(string $name, array $options = []): bool
     {
         $list = $this->listCollectionNames(["name" => $name]);
 
         if (\count($list->cursor->firstBatch) > 0) {
-            throw new Duplicate('Collection Exists');
+            throw new Exception('Collection Exists');
         }
 
         $res = $this->query(array_merge([
@@ -264,6 +314,7 @@ class MongoClient
      * @param string $name
      * @param array $options
      * @return bool
+     * @throws Exception
      */
     public function dropCollection(string $name, array $options = []): bool
     {
@@ -282,10 +333,10 @@ class MongoClient
      * @param array $options
      *
      * @return stdClass
+     * @throws Exception
      */
     public function listCollectionNames(array $filter = [], array $options = []): stdClass
     {
-
         $qry = array_merge(
             [
                 "listCollections" => 1.0,
@@ -308,6 +359,7 @@ class MongoClient
      * @param array $options
      *
      * @return boolean
+     * @throws Exception
      */
     public function createIndexes(string $collection, array $indexes, array $options = []): bool
     {
@@ -341,9 +393,10 @@ class MongoClient
      * @param array $indexes
      * @param array $options
      *
-     * @return array
+     * @return Client
+     * @throws Exception
      */
-    public function dropIndexes(string $collection, array $indexes, array $options = []): MongoClient
+    public function dropIndexes(string $collection, array $indexes, array $options = []): self
     {
         $this->query(
             array_merge([
@@ -371,7 +424,9 @@ class MongoClient
         $docObj = new stdClass();
 
         foreach ($document as $key => $value) {
-            if(\is_null($value)) continue;
+            if (\is_null($value)) {
+                continue;
+            }
 
             $docObj->{$key} = $value;
         }
@@ -379,22 +434,23 @@ class MongoClient
         $docObj->_id ??= new BSON\ObjectId();
 
         $this->query(array_merge([
-            MongoCommand::INSERT => $collection,
+            self::COMMAND_INSERT => $collection,
             'documents' => [$docObj],
         ], $options));
 
-        return $this->lastInsertedDocument($collection);
+        return $this->toArray($docObj);
     }
 
     /**
-     * Retreive the last inserted document.
+     * Retrieve the last lastDocument
      *
      * @param string $collection
      *
      * @return array
+     * @throws Exception
      */
 
-    public function lastInsertedDocument(string $collection): array
+    public function lastDocument(string $collection): array
     {
         $result = $this->find($collection, [], [
             'sort' => ['_id' => -1],
@@ -413,21 +469,23 @@ class MongoClient
      * @param array $updates
      * @param array $options
      *
-     * @return MongoClient
+     * @return Client
+     * @throws Exception
      */
-    public function update(string $collection, array $where = [], array $updates = [], array $options = []): MongoClient
+    public function update(string $collection, array $where = [], array $updates = [], array $options = []): self
     {
-
         $cleanUpdates = [];
 
-        foreach($updates as $k => $v) {
-            if(\is_null($v)) continue;
+        foreach ($updates as $k => $v) {
+            if (\is_null($v)) {
+                continue;
+            }
             $cleanUpdates[$k] = $v;
         }
 
         $this->query(
             array_merge([
-                MongoCommand::UPDATE => $collection,
+                self::COMMAND_UPDATE => $collection,
                 'updates' => [
                     [
                         'q' => $this->toObject($where),
@@ -451,15 +509,18 @@ class MongoClient
      * @param array $updates
      * @param array $options
      *
-     * @return MongoClient
+     * @return Client
+     * @throws Exception
      */
 
-    public function upsert(string $collection, array $where = [], array $updates = [], array $options = []): MongoClient
+    public function upsert(string $collection, array $where = [], array $updates = [], array $options = []): self
     {
         $cleanUpdates = [];
 
-        foreach($updates as $k => $v) {
-            if(\is_null($v)) continue;
+        foreach ($updates as $k => $v) {
+            if (\is_null($v)) {
+                continue;
+            }
             $cleanUpdates[$k] = $v;
         }
 
@@ -491,18 +552,18 @@ class MongoClient
      * @param array $options
      *
      * @return stdClass
+     * @throws Exception
      */
     public function find(string $collection, array $filters = [], array $options = []): stdClass
     {
-        $result =  $this->query(
+        $filters = $this->cleanFilters($filters);
+
+        return $this->query(
             array_merge([
-                MongoCommand::FIND => $collection,
+                self::COMMAND_FIND => $collection,
                 'filter' => $this->toObject($filters),
             ], $options)
         );
-
-        return $result;
-
     }
 
     /**
@@ -515,20 +576,19 @@ class MongoClient
      * @param array $filters
      * @param array $options
      *
-     * @return array
+     * @return stdClass
+     * @throws Exception
      */
     public function findAndModify(string $collection, array $update, bool $remove = false, array $filters = [], array $options = []): stdClass
     {
-        $result = $this->query(
+        return $this->query(
             array_merge([
-                MongoCommand::FIND_AND_MODIFY => $collection,
+                self::COMMAND_FIND_AND_MODIFY => $collection,
                 'filter' => $this->toObject($filters),
                 'remove' => $remove,
                 'update' => $update,
             ], $options)
         );
-
-        return $result;
     }
 
     /**
@@ -537,14 +597,14 @@ class MongoClient
      *
      * @param int $cursorId
      * @param string $collection
-     * @param int batchSize
-     *
+     * @param int $batchSize
      * @return  stdClass
+     * @throws Exception
      */
     public function getMore(int $cursorId, string $collection, int $batchSize = 25): stdClass
     {
         return $this->query([
-            MongoCommand::GET_MORE => $cursorId,
+            self::COMMAND_GET_MORE => $cursorId,
             'collection' => $collection,
             'batchSize' => $batchSize
         ]);
@@ -561,13 +621,14 @@ class MongoClient
      * @param array $options
      *
      * @return int
+     * @throws Exception
      */
     public function delete(string $collection, array $filters = [], int $limit = 1, array $deleteOptions = [], array $options = []): int
     {
         return $this->query(
             array_merge(
                 [
-                    MongoCommand::DELETE => $collection,
+                    self::COMMAND_DELETE => $collection,
                     'deletes' => [
                         $this->toObject(
                             array_merge(
@@ -593,6 +654,7 @@ class MongoClient
      * @param array $options
      *
      * @return int
+     * @throws Exception
      */
     public function count(string $collection, array $filters, array $options): int
     {
@@ -609,16 +671,15 @@ class MongoClient
      * @param array $pipeline
      *
      * @return stdClass
+     * @throws Exception
      */
     public function aggregate(string $collection, array $pipeline): stdClass
     {
-        $result = $this->query([
-            MongoCommand::AGGREGATE => $collection,
+        return $this->query([
+            self::COMMAND_AGGREGATE => $collection,
             'pipeline' => $pipeline,
             'cursor' => $this->toObject([]),
         ]);
-
-        return $result;
     }
 
     /**
@@ -642,13 +703,14 @@ class MongoClient
     /**
      * Convert an object (stdClass) to an assoc array.
      *
-     * @param stdClass|array|string|null $obj
-     *
+     * @param mixed $obj
      * @return array|null
      */
-    public function toArray(stdClass|array|string|null $obj): array|null
+    public function toArray(mixed $obj): ?array
     {
-        if(\is_null($obj)) return null;
+        if (\is_null($obj)) {
+            return null;
+        }
 
         if (is_object($obj) || is_array($obj)) {
             $ret = (array) $obj;
@@ -660,5 +722,32 @@ class MongoClient
         }
 
         return [$obj];
+    }
+
+    private function cleanFilters($filters): array
+    {
+        $cleanedFilters = [];
+
+        foreach ($filters as $k => $v) {
+            $value = $v;
+
+            if (in_array($k, ['$and', '$or', '$nor']) && is_array($v)) {
+                $values = [];
+
+                foreach ($v as $item) {
+                    if (is_null($item)) {
+                        continue;
+                    }
+
+                    $values[] = is_array($item) ? $this->toObject($item) : $item;
+                }
+
+                $value = $values;
+            }
+
+            $cleanedFilters[$k] = $value;
+        }
+
+        return $cleanedFilters;
     }
 }

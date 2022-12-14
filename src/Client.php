@@ -202,11 +202,18 @@ class Client
         $result = BSON\toPHP(substr($res, 21, $responseLength - 21));
 
         if (property_exists($result, "writeErrors")) {
-            // Throws a Utopia\Mongo\Exception with Code Error
-
+            // Throws Utopia\Mongo\Exception
             throw new Exception(
                 $result->writeErrors[0]->errmsg,
                 $result->writeErrors[0]->code
+            );
+        }
+
+        if (property_exists($result, 'errmsg')) {
+            // Throws Utopia\Mongo\Exception
+            throw new Exception(
+                'E'.$result->code.' '.$result->codeName.':'.$result->errmsg,
+                $result->code
             );
         }
 
@@ -216,10 +223,6 @@ class Client
 
         if (property_exists($result, "nonce") && $result->ok === 1.0) {
             return $result;
-        }
-
-        if (property_exists($result, 'errmsg')) {
-            throw new Exception($result->errmsg);
         }
 
         if ($result->ok === 1.0) {

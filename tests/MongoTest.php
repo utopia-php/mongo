@@ -106,9 +106,31 @@ class MongoTest extends TestCase
         self::assertIsArray($doc->array);
         self::assertIsString($doc->date_string);
         self::assertIsObject($doc->date_object); // Todo: This is not working can't retrieve the object back
+    }
 
+    public function testDriverException()
+    {
+        self::expectException('MongoDB\Driver\Exception\InvalidArgumentException');
+        self::expectExceptionCode(0);
+        new ObjectId('triggerAnError');
+    }
+
+    public function testDuplicationException()
+    {
         self::expectException(Exception::class);
         self::expectExceptionCode(11000);
         $this->getDatabase()->insert('movies', ['_id' => 999, 'b' => 'Duplication']);
+    }
+
+    public function testExceedTimeException()
+    {
+        self::expectException(Exception::class);
+        self::expectExceptionCode(50);
+
+        $this->getDatabase()->find(
+                'movies',
+                ['$where' => "sleep(1000) || true"],
+                ['maxTimeMS'=> 1]
+            )->cursor->firstBatch ?? [];
     }
 }

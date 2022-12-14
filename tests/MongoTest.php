@@ -119,7 +119,7 @@ class MongoTest extends TestCase
     {
         self::expectException(Exception::class);
         self::expectExceptionCode(11000);
-        $this->getDatabase()->insert('movies', ['_id' => 999, 'b' => 'Duplication']);
+        $this->getDatabase()->insert('movies', ['_id' => 999]);
     }
 
     public function testExceedTimeException()

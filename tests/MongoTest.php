@@ -128,9 +128,9 @@ class MongoTest extends TestCase
         self::expectExceptionCode(50);
 
         $this->getDatabase()->find(
-                'movies',
-                ['$where' => 'sleep(1000) || true'],
-                ['maxTimeMS'=> 1]
-            )->cursor->firstBatch ?? [];
+            'movies',
+            ['$where' => 'sleep(1000) || true'],
+            ['maxTimeMS'=> 1]
+        )->cursor->firstBatch ?? [];
     }
 }

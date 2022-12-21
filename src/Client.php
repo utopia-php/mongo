@@ -212,7 +212,7 @@ class Client
         if (property_exists($result, 'errmsg')) {
             // Throws Utopia\Mongo\Exception
             throw new Exception(
-                'E'.$result->code.' '.$result->codeName.':'.$result->errmsg,
+                'E'.$result->code.' '.$result->codeName.': '.$result->errmsg,
                 $result->code
             );
         }

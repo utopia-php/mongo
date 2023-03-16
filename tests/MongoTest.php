@@ -108,6 +108,53 @@ class MongoTest extends TestCase
         self::assertIsObject($doc->date_object); // Todo: This is not working can't retrieve the object back
     }
 
+    public function testUpdateDocument(): void
+    {
+        $this->getDatabase()->insert(
+            'movies',
+            [
+                'name' => 'Armageddon',
+                'country' => 'AUS',
+                'language' => 'English'
+            ]
+        );
+
+        $this->getDatabase()->update(
+            'movies',
+            ['name' => 'Armageddon'],
+            ['$set' => ['name' => 'Armageddon 2']]
+        );
+
+        $doc = $this->getDatabase()->find(
+            'movies',
+            ['name' => 'Armageddon 2']
+        )->cursor->firstBatch ?? [];
+
+        self::assertCount(1, $doc);
+    }
+
+    public function testUpdateMultipleDocuments(): void
+    {
+        $this->getDatabase()->update(
+            'movies',
+            ['name' => 'Armageddon 2'],
+            ['$set' => ['name' => 'Armageddon']]
+        );
+
+        $this->getDatabase()->update(
+            'movies',
+            ['name' => 'Armageddon'],
+            ['$rename' => ['name' => 'title']],
+            multi: true
+        );
+
+        $docs = $this->getDatabase()->find(
+            'movies',
+            ['title' => 'Armageddon']
+        )->cursor->firstBatch ?? [];
+        self::assertCount(2, $docs);
+    }
+
     public function testDriverException()
     {
         self::expectException('MongoDB\Driver\Exception\InvalidArgumentException');

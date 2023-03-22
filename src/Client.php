@@ -471,11 +471,12 @@ class Client
      * @param array $where
      * @param array $updates
      * @param array $options
+     * @param bool $multi
      *
      * @return Client
      * @throws Exception
      */
-    public function update(string $collection, array $where = [], array $updates = [], array $options = []): self
+    public function update(string $collection, array $where = [], array $updates = [], array $options = [], bool $multi = false): self
     {
         $cleanUpdates = [];
 
@@ -493,7 +494,7 @@ class Client
                     [
                         'q' => $this->toObject($where),
                         'u' => $this->toObject($cleanUpdates),
-                        'multi' => false,
+                        'multi' => $multi,
                         'upsert' => false
                     ]
                 ]

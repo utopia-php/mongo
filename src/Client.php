@@ -40,7 +40,7 @@ class Client
     /**
      * Authentication for connection
      */
-    private Auth $auth;
+    private ?Auth $auth;
 
     /**
      * Default Database Name
@@ -104,7 +104,7 @@ class Client
 
         $this->client->connect($this->host, $this->port);
 
-        if($this->auth) {
+        if(isset($this->auth)) {
             [$payload, $db] = $this->auth->start();
 
             $res = $this->query($payload, $db);

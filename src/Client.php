@@ -83,10 +83,12 @@ class Client
             ? new CoroutineClient(SWOOLE_SOCK_TCP | SWOOLE_KEEP)
             : new SwooleClient(SWOOLE_SOCK_TCP | SWOOLE_KEEP);
 
-        $this->auth = new Auth([
-            'authcid' => $user,
-            'secret' => Auth::encodeCredentials($user, $password)
-        ]);
+        if(!empty($user) && !empty($password)) {
+            $this->auth = new Auth([
+                'authcid' => $user,
+                'secret' => Auth::encodeCredentials($user, $password)
+            ]);
+        }
     }
 
     /**
@@ -101,13 +103,16 @@ class Client
         }
 
         $this->client->connect($this->host, $this->port);
-        [$payload, $db] = $this->auth->start();
 
-        $res = $this->query($payload, $db);
+        if($this->auth) {
+            [$payload, $db] = $this->auth->start();
 
-        [$payload, $db] = $this->auth->continue($res);
+            $res = $this->query($payload, $db);
 
-        $res = $this->query($payload, $db);
+            [$payload, $db] = $this->auth->continue($res);
+
+            $res = $this->query($payload, $db);
+        }
 
         return $this;
     }

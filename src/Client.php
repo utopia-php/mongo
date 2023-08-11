@@ -444,6 +444,34 @@ class Client
         return $this->toArray($docObj);
     }
 
+    public function insertMany(string $collection, array $documents, array $options = []): array
+    {
+        $docObjs = [];
+
+        foreach ($documents as $document) {
+            $docObj = new stdClass();
+
+            foreach ($document as $key => $value) {
+                if (\is_null($value)) {
+                    continue;
+                }
+
+                $docObj->{$key} = $value;
+            }
+
+            $docObj->_id ??= new BSON\ObjectId();
+
+            $docObjs[] = $docObj;
+        }
+
+        $this->query(array_merge([
+            self::COMMAND_INSERT => $collection,
+            'documents' => $docObjs,
+        ], $options));
+
+        return $this->toArray($docObjs);
+    }
+
     /**
      * Retrieve the last lastDocument
      *

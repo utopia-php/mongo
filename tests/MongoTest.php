@@ -108,6 +108,34 @@ class MongoTest extends TestCase
         self::assertIsObject($doc->date_object); // Todo: This is not working can't retrieve the object back
     }
 
+    public function testCreateDocuments(): array
+    {
+        $docs = $this->getDatabase()->insertMany(
+            'movies',
+            [
+                [
+                    'name' => 'Armageddon',
+                    'country' => 'USA',
+                    'language' => 'English'
+                ],
+                [
+                    'name' => '9 Monkeys',
+                    'country' => 'USA',
+                    'language' => 'English'
+                ],
+                [
+                    'name' => 300,
+                    'country' => 'USA',
+                    'language' => 'English'
+                ]
+            ]
+        );
+
+        self::assertCount(3, $docs);
+
+        return $docs;
+    }
+
     public function testUpdateDocument(): void
     {
         $this->getDatabase()->insert(
@@ -133,26 +161,42 @@ class MongoTest extends TestCase
         self::assertCount(1, $doc);
     }
 
+    /**
+     * @depends testCreateDocuments
+     * @return void
+     * @throws Exception
+     */
+    public function testUpdateDocuments(array $documents): void
+    {
+        $this->getDatabase()->update(
+            'movies',
+            updates: ['$set' => ['name' => 'Armageddon 2']],
+            multi: true
+        );
+
+        $docs = $this->getDatabase()->find(
+            'movies',
+            filters: ['name' => 'Armageddon 2']
+        )->cursor->firstBatch ?? [];
+
+        self::assertCount(8, $docs);
+    }
+
     public function testUpdateMultipleDocuments(): void
     {
         $this->getDatabase()->update(
             'movies',
             ['name' => 'Armageddon 2'],
-            ['$set' => ['name' => 'Armageddon']]
-        );
-
-        $this->getDatabase()->update(
-            'movies',
-            ['name' => 'Armageddon'],
             ['$rename' => ['name' => 'title']],
             multi: true
         );
 
         $docs = $this->getDatabase()->find(
             'movies',
-            ['title' => 'Armageddon']
+            ['title' => 'Armageddon 2']
         )->cursor->firstBatch ?? [];
-        self::assertCount(2, $docs);
+
+        self::assertCount(8, $docs);
     }
 
     public function testDriverException()

@@ -30,7 +30,7 @@
     "require": {
         "php": ">=8.0",
         "ext-mongodb": "*",
-        "mongodb/mongodb": "1.8.0"
+        "mongodb/mongodb": "1.10.0"
     },
     "require-dev": {
         "fakerphp/faker": "^1.14",

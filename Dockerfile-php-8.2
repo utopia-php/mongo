@@ -13,7 +13,7 @@ RUN composer update --ignore-platform-reqs --optimize-autoloader \
     
 FROM php:8.2-cli-alpine as compile
 
-ENV PHP_SWOOLE_VERSION=v4.8.0 \
+ENV PHP_SWOOLE_VERSION=v5.1.2 \
     PHP_MONGO_VERSION=1.11.1
     
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone

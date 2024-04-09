@@ -11,7 +11,7 @@ COPY composer.json /usr/local/src/
 RUN composer update --ignore-platform-reqs --optimize-autoloader \
     --no-plugins --no-scripts --prefer-dist
     
-FROM php:8.0-cli-alpine as compile
+FROM php:8.2-cli-alpine as compile
 
 ENV PHP_SWOOLE_VERSION=v4.8.0 \
     PHP_MONGO_VERSION=1.11.1
@@ -59,8 +59,8 @@ RUN echo "opcache.enable_cli=1" >> $PHP_INI_DIR/php.ini
 RUN echo "memory_limit=1024M" >> $PHP_INI_DIR/php.ini
 
 COPY --from=composer /usr/local/src/vendor /usr/src/code/vendor
-COPY --from=swoole /usr/local/lib/php/extensions/no-debug-non-zts-20200930/swoole.so /usr/local/lib/php/extensions/no-debug-non-zts-20200930/
-COPY --from=mongodb /usr/local/lib/php/extensions/no-debug-non-zts-20200930/mongodb.so /usr/local/lib/php/extensions/no-debug-non-zts-20200930/
+COPY --from=swoole /usr/local/lib/php/extensions/no-debug-non-zts-20220829/swoole.so /usr/local/lib/php/extensions/no-debug-non-zts-20220829/
+COPY --from=mongodb /usr/local/lib/php/extensions/no-debug-non-zts-20220829/mongodb.so /usr/local/lib/php/extensions/no-debug-non-zts-20220829/
 
 # Add Source Code
 COPY . /usr/src/code

@@ -66,3 +66,4 @@ COPY --from=mongodb /usr/local/lib/php/extensions/no-debug-non-zts-20200930/mong
 COPY . /usr/src/code
 
 CMD [ "tail", "-f", "/dev/null" ]
+

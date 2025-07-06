@@ -36,6 +36,7 @@ class Client
     public const COMMAND_AGGREGATE = "aggregate";
     public const COMMAND_DISTINCT = "distinct";
     public const COMMAND_MAP_REDUCE = "mapReduce";
+    public const COMMAND_BULK_WRITE = "bulkWrite";
 
     /**
      * Authentication for connection
@@ -533,6 +534,125 @@ class Client
     }
 
     /**
+     * Bulk write operations.
+     * https://docs.mongodb.com/manual/reference/command/bulkWrite/#mongodb-dbcommand-dbcmd.bulkWrite
+     *
+     * @param string $collection
+     * @param array $operations Array of operations to perform
+     * @param array $options
+     *
+     * @return stdClass
+     * @throws Exception
+     */
+    public function bulkWrite(string $collection, array $operations, array $options = []): stdClass
+    {
+        $bulkOperations = [];
+
+        foreach ($operations as $operation) {
+            if (!isset($operation['operationType'])) {
+                throw new Exception('Each operation must have an operationType');
+            }
+
+            $operationType = $operation['operationType'];
+            $bulkOperation = [];
+
+            switch ($operationType) {
+                case 'insertOne':
+                    if (!isset($operation['document'])) {
+                        throw new Exception('insertOne operation requires a document');
+                    }
+                    
+                    $docObj = new stdClass();
+                    foreach ($operation['document'] as $key => $value) {
+                        if (\is_null($value)) {
+                            continue;
+                        }
+                        $docObj->{$key} = $value;
+                    }
+                    $docObj->_id ??= new BSON\ObjectId();
+                    
+                    $bulkOperation = [
+                        'insertOne' => [
+                            'document' => $docObj
+                        ]
+                    ];
+                    break;
+
+                case 'updateOne':
+                case 'updateMany':
+                    if (!isset($operation['filter']) || !isset($operation['update'])) {
+                        throw new Exception($operationType . ' operation requires filter and update');
+                    }
+
+                    $cleanUpdates = [];
+                    foreach ($operation['update'] as $k => $v) {
+                        if (\is_null($v)) {
+                            continue;
+                        }
+                        $cleanUpdates[$k] = $v;
+                    }
+
+                    $bulkOperation = [
+                        $operationType => [
+                            'filter' => $this->toObject($operation['filter']),
+                            'update' => $this->toObject($cleanUpdates),
+                            'upsert' => $operation['upsert'] ?? false
+                        ]
+                    ];
+                    break;
+
+                case 'replaceOne':
+                    if (!isset($operation['filter']) || !isset($operation['replacement'])) {
+                        throw new Exception('replaceOne operation requires filter and replacement');
+                    }
+
+                    $cleanReplacement = [];
+                    foreach ($operation['replacement'] as $k => $v) {
+                        if (\is_null($v)) {
+                            continue;
+                        }
+                        $cleanReplacement[$k] = $v;
+                    }
+
+                    $bulkOperation = [
+                        'replaceOne' => [
+                            'filter' => $this->toObject($operation['filter']),
+                            'replacement' => $this->toObject($cleanReplacement),
+                            'upsert' => $operation['upsert'] ?? false
+                        ]
+                    ];
+                    break;
+
+                case 'deleteOne':
+                case 'deleteMany':
+                    if (!isset($operation['filter'])) {
+                        throw new Exception($operationType . ' operation requires a filter');
+                    }
+
+                    $bulkOperation = [
+                        $operationType => [
+                            'filter' => $this->toObject($operation['filter'])
+                        ]
+                    ];
+                    break;
+
+                default:
+                    throw new Exception('Unsupported operation type: ' . $operationType);
+            }
+
+            $bulkOperations[] = $bulkOperation;
+        }
+
+        return $this->query(
+            array_merge([
+                self::COMMAND_BULK_WRITE => $collection,
+                'operations' => $bulkOperations,
+                'ordered' => $options['ordered'] ?? true
+            ], $options)
+        );
+    }
+
+    /**
      * Insert, or update, a document/s.
      * https://docs.mongodb.com/manual/reference/command/update/#syntax
      *
@@ -782,4 +902,5 @@ class Client
 
         return $cleanedFilters;
     }
+
 }

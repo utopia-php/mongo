@@ -534,122 +534,35 @@ class Client
     }
 
     /**
-     * Bulk write operations.
-     * https://docs.mongodb.com/manual/reference/command/bulkWrite/#mongodb-dbcommand-dbcmd.bulkWrite
+     * Perform multiple upserts in a single update command (wire protocol batch).
+     * Each operation should have 'filter' and 'update' keys.
      *
      * @param string $collection
-     * @param array $operations Array of operations to perform
+     * @param array $operations
      * @param array $options
-     *
-     * @return stdClass
+     * @return self
      * @throws Exception
      */
-    public function bulkWrite(string $collection, array $operations, array $options = []): stdClass
+    public function bulkUpsert(string $collection, array $operations, array $options = []): self
     {
-        $bulkOperations = [];
-
-        foreach ($operations as $operation) {
-            if (!isset($operation['operationType'])) {
-                throw new Exception('Each operation must have an operationType');
-            }
-
-            $operationType = $operation['operationType'];
-            $bulkOperation = [];
-
-            switch ($operationType) {
-                case 'insertOne':
-                    if (!isset($operation['document'])) {
-                        throw new Exception('insertOne operation requires a document');
-                    }
-                    
-                    $docObj = new stdClass();
-                    foreach ($operation['document'] as $key => $value) {
-                        if (\is_null($value)) {
-                            continue;
-                        }
-                        $docObj->{$key} = $value;
-                    }
-                    $docObj->_id ??= new BSON\ObjectId();
-                    
-                    $bulkOperation = [
-                        'insertOne' => [
-                            'document' => $docObj
-                        ]
-                    ];
-                    break;
-
-                case 'updateOne':
-                case 'updateMany':
-                    if (!isset($operation['filter']) || !isset($operation['update'])) {
-                        throw new Exception($operationType . ' operation requires filter and update');
-                    }
-
-                    $cleanUpdates = [];
-                    foreach ($operation['update'] as $k => $v) {
-                        if (\is_null($v)) {
-                            continue;
-                        }
-                        $cleanUpdates[$k] = $v;
-                    }
-
-                    $bulkOperation = [
-                        $operationType => [
-                            'filter' => $this->toObject($operation['filter']),
-                            'update' => $this->toObject($cleanUpdates),
-                            'upsert' => $operation['upsert'] ?? false
-                        ]
-                    ];
-                    break;
-
-                case 'replaceOne':
-                    if (!isset($operation['filter']) || !isset($operation['replacement'])) {
-                        throw new Exception('replaceOne operation requires filter and replacement');
-                    }
-
-                    $cleanReplacement = [];
-                    foreach ($operation['replacement'] as $k => $v) {
-                        if (\is_null($v)) {
-                            continue;
-                        }
-                        $cleanReplacement[$k] = $v;
-                    }
-
-                    $bulkOperation = [
-                        'replaceOne' => [
-                            'filter' => $this->toObject($operation['filter']),
-                            'replacement' => $this->toObject($cleanReplacement),
-                            'upsert' => $operation['upsert'] ?? false
-                        ]
-                    ];
-                    break;
-
-                case 'deleteOne':
-                case 'deleteMany':
-                    if (!isset($operation['filter'])) {
-                        throw new Exception($operationType . ' operation requires a filter');
-                    }
-
-                    $bulkOperation = [
-                        $operationType => [
-                            'filter' => $this->toObject($operation['filter'])
-                        ]
-                    ];
-                    break;
-
-                default:
-                    throw new Exception('Unsupported operation type: ' . $operationType);
-            }
-
-            $bulkOperations[] = $bulkOperation;
+        $updates = [];
+        foreach ($operations as $op) {
+            $updates[] = [
+                'q' => $op['filter'],
+                'u' => $op['update'],
+                'upsert' => true,
+            ];
         }
-
-        return $this->query(
-            array_merge([
-                self::COMMAND_BULK_WRITE => $collection,
-                'operations' => $bulkOperations,
-                'ordered' => $options['ordered'] ?? true
-            ], $options)
+        $this->query(
+            array_merge(
+                [
+                    'update' => $collection,
+                    'updates' => $updates,
+                ],
+                $options
+            )
         );
+        return $this;
     }
 
     /**

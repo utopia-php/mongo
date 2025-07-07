@@ -36,7 +36,7 @@ class Client
     public const COMMAND_AGGREGATE = "aggregate";
     public const COMMAND_DISTINCT = "distinct";
     public const COMMAND_MAP_REDUCE = "mapReduce";
-    public const COMMAND_BULK_WRITE = "bulkWrite";
+
 
     /**
      * Authentication for connection

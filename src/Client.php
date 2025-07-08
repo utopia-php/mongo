@@ -547,16 +547,23 @@ class Client
     {
         $updates = [];
         foreach ($operations as $op) {
+            $cleanUpdate = [];
+            foreach ($op['update'] as $k => $v) {
+                if (!is_null($v)) {
+                    $cleanUpdate[$k] = $v;
+                }
+            }
+
             $updates[] = [
                 'q' => $op['filter'],
-                'u' => $op['update'],
+                'u' => $cleanUpdate,
                 'upsert' => true,
             ];
         }
         $this->query(
             array_merge(
                 [
-                    'update' => $collection,
+                    self::COMMAND_UPDATE => $collection,
                     'updates' => $updates,
                 ],
                 $options

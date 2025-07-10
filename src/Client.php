@@ -822,5 +822,4 @@ class Client
 
         return $cleanedFilters;
     }
-
 }

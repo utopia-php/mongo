@@ -236,7 +236,7 @@ class MongoTest extends TestCase
                 'country' => 'UK',
                 'counter' => 1
             ]
-        ); 
+        );
 
         $this->getDatabase()->bulkUpsert('movies_upsert', [
             [

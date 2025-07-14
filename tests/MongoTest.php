@@ -236,7 +236,7 @@ class MongoTest extends TestCase
                 'country' => 'UK',
                 'counter' => 1
             ]
-        );
+        ); 
 
         $this->getDatabase()->bulkUpsert('movies_upsert', [
             [
@@ -255,7 +255,6 @@ class MongoTest extends TestCase
         ]);
 
         $documents = $this->getDatabase()->find('movies_upsert')->cursor->firstBatch ?? [];
-        var_dump($documents);
         self::assertCount(2, $documents);
         self::assertEquals(4, $documents[0]->counter);
         self::assertEquals('The godfather 2', $documents[1]->name);

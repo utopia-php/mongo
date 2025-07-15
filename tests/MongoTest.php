@@ -254,6 +254,7 @@ class MongoTest extends TestCase
             ],
         ]);
 
+        
         $documents = $this->getDatabase()->find('movies_upsert')->cursor->firstBatch ?? [];
         self::assertCount(2, $documents);
         self::assertEquals(4, $documents[0]->counter);

@@ -19,7 +19,7 @@ class MongoTest extends TestCase
         if (!is_null(self::$db)) {
             return self::$db;
         }
-
+       
         $client = new Client('testing', 'mongo', 27017, 'root', 'example', false);
         $client->connect();
 
@@ -110,6 +110,7 @@ class MongoTest extends TestCase
 
     public function testCreateDocuments(): array
     {
+   
         $docs = $this->getDatabase()->insertMany(
             'movies',
             [
@@ -226,7 +227,7 @@ class MongoTest extends TestCase
     }
 
 
-    public function testBulkUpsert()
+    public function testUpsert()
     {
         $this->getDatabase()->insert(
             'movies_upsert',
@@ -237,8 +238,8 @@ class MongoTest extends TestCase
                 'counter' => 1
             ]
         ); 
-
-        $this->getDatabase()->bulkUpsert('movies_upsert', [
+    
+        $this->getDatabase()->upsert('movies_upsert', [
             [
                 'filter' => ['name' => 'Gone with the wind'],
                 'update' => [

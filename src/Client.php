@@ -534,18 +534,20 @@ class Client
     }
 
     /**
-     * Perform multiple upserts in a single update command (wire protocol batch).
-     * Each operation should have 'filter' and 'update' keys.
+     * Insert, or update, document(s) with support for bulk operations.
+     * https://docs.mongodb.com/manual/reference/command/update/#syntax
      *
      * @param string $collection
-     * @param array $operations
+     * @param array $operations Array of operations, each with 'filter' and 'update' keys
      * @param array $options
+     *
      * @return self
      * @throws Exception
      */
-    public function bulkUpsert(string $collection, array $operations, array $options = []): self
+    public function upsert(string $collection, array $operations, array $options = []): self
     {
         $updates = [];
+        
         foreach ($operations as $op) {
             $cleanUpdate = [];
             foreach ($op['update'] as $k => $v) {
@@ -554,12 +556,16 @@ class Client
                 }
             }
 
-            $updates[] = [
+            $updateOperation = [
                 'q' => $op['filter'],
                 'u' => $cleanUpdate,
                 'upsert' => true,
+                'multi' => isset($op['multi']) ? $op['multi'] : false,
             ];
+
+            $updates[] = $updateOperation;
         }
+
         $this->query(
             array_merge(
                 [
@@ -572,48 +578,7 @@ class Client
         return $this;
     }
 
-    /**
-     * Insert, or update, a document/s.
-     * https://docs.mongodb.com/manual/reference/command/update/#syntax
-     *
-     * @param string $collection
-     * @param array $where
-     * @param array $updates
-     * @param array $options
-     *
-     * @return Client
-     * @throws Exception
-     */
 
-    public function upsert(string $collection, array $where = [], array $updates = [], array $options = []): self
-    {
-        $cleanUpdates = [];
-
-        foreach ($updates as $k => $v) {
-            if (\is_null($v)) {
-                continue;
-            }
-            $cleanUpdates[$k] = $v;
-        }
-
-
-        $this->query(
-            array_merge(
-                [
-                    'update' => $collection,
-                    'updates' => [
-                        [
-                            'q' => ['_uid' => $where['_uid']],
-                            'u' => ['$set' => $cleanUpdates],
-                        ]
-                    ],
-                ],
-                $options
-            )
-        );
-
-        return $this;
-    }
 
     /**
      * Find a document/s.

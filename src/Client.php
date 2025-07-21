@@ -787,4 +787,27 @@ class Client
 
         return $cleanedFilters;
     }
+
+    private ?bool $replicaSet = null;
+
+    /**
+     * Check if MongoDB is running as a replica set.
+     *
+     * @return bool True if this is a replica set, false if standalone
+     * @throws Exception
+     */
+    public function isReplicaSet(): bool
+    {
+        if ($this->replicaSet !== null) {
+            return $this->replicaSet;
+        }
+
+        $result = $this->query([
+            'isMaster' => 1,
+        ], 'admin');
+
+        $this->replicaSet = property_exists($result, 'setName');
+        return $this->replicaSet;
+    }
+
 }

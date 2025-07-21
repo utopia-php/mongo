@@ -262,4 +262,5 @@ class MongoTest extends TestCase
         self::assertEquals('USA', $documents[1]->country);
         self::assertEquals('English', $documents[1]->language);
     }
+
 }

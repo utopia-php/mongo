@@ -110,6 +110,7 @@ class MongoTest extends TestCase
 
     public function testCreateDocuments(): array
     {
+
         $docs = $this->getDatabase()->insertMany(
             'movies',
             [
@@ -226,7 +227,7 @@ class MongoTest extends TestCase
     }
 
 
-    public function testBulkUpsert()
+    public function testUpsert()
     {
         $this->getDatabase()->insert(
             'movies_upsert',
@@ -238,7 +239,7 @@ class MongoTest extends TestCase
             ]
         ); 
 
-        $this->getDatabase()->bulkUpsert('movies_upsert', [
+        $this->getDatabase()->upsert('movies_upsert', [
             [
                 'filter' => ['name' => 'Gone with the wind'],
                 'update' => [
@@ -254,7 +255,6 @@ class MongoTest extends TestCase
             ],
         ]);
 
-        
         $documents = $this->getDatabase()->find('movies_upsert')->cursor->firstBatch ?? [];
         self::assertCount(2, $documents);
         self::assertEquals(4, $documents[0]->counter);
@@ -262,4 +262,5 @@ class MongoTest extends TestCase
         self::assertEquals('USA', $documents[1]->country);
         self::assertEquals('English', $documents[1]->language);
     }
+
 }

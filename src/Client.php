@@ -756,7 +756,7 @@ class Client
             'lsid' => $lsid,
             'txnNumber' => $txnNumber,
             'autocommit' => $autocommit
-        ],  'admin');
+        ], 'admin');
 
         // End the session after successful commit
         $this->endSessions([$lsid]);
@@ -775,7 +775,6 @@ class Client
      */
     public function abortTransaction(array $lsid, int $txnNumber, bool $autocommit = false)
     {
-       
         $txnNumber = new \MongoDB\BSON\Int64($txnNumber);
 
         $result = $this->query([
@@ -783,7 +782,7 @@ class Client
             'lsid' => $lsid,
             'txnNumber' => $txnNumber,
             'autocommit' => $autocommit
-        ],  'admin');
+        ], 'admin');
 
         // End the session after successful rollback
         $this->endSessions([$lsid]);
@@ -908,5 +907,4 @@ class Client
         $this->replicaSet = property_exists($result, 'setName');
         return $this->replicaSet;
     }
-
 }

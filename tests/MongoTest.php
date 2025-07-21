@@ -110,7 +110,6 @@ class MongoTest extends TestCase
 
     public function testCreateDocuments(): array
     {
-
         $docs = $this->getDatabase()->insertMany(
             'movies',
             [
@@ -237,7 +236,7 @@ class MongoTest extends TestCase
                 'country' => 'UK',
                 'counter' => 1
             ]
-        ); 
+        );
 
         $this->getDatabase()->upsert('movies_upsert', [
             [
@@ -262,5 +261,4 @@ class MongoTest extends TestCase
         self::assertEquals('USA', $documents[1]->country);
         self::assertEquals('English', $documents[1]->language);
     }
-
 }

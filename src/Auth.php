@@ -10,7 +10,7 @@ class Auth
     private string $secret;
     private string $authzid;
     private string $gs2Header;
-    private string $cnonce;
+    private ?string $cnonce = null;
     private string $firstMessageBare;
     private string $saltedPassword;
     private string $authMessage;

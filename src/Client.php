@@ -137,7 +137,7 @@ class Client
             '$db' => $db ?? $this->database,
         ]);
 
-        $sections = BSON\fromPHPWithOptions($params);
+        $sections = MongoDB\BSON\fromPHP($params);
         $message = pack('V*', 21 + strlen($sections), $this->id, 0, 2013, 0) . "\0" . $sections;
         return $this->send($message);
     }
@@ -200,7 +200,7 @@ class Client
         /**
          * @var stdClass $result
          */
-        $result = BSON\toPHPWithOptions(substr($res, 21, $responseLength - 21));
+        $result = MongoDB\BSON\fromPHP(substr($res, 21, $responseLength - 21));
 
         if (property_exists($result, "writeErrors")) {
             // Throws Utopia\Mongo\Exception

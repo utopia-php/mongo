@@ -198,8 +198,8 @@ class Client
             (!isset($responseLength)) || ($receivedLength < $responseLength)
         );
 
-        /**
-         * @var stdClass $result
+       /** 
+        * @var object $result
          */
         $bsonString = substr($res, 21, $responseLength - 21);
         $result = Document::fromBSON($bsonString)->toPHP();

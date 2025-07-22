@@ -203,6 +203,9 @@ class Client
          */
         $bsonString = substr($res, 21, $responseLength - 21);
         $result = Document::fromBSON($bsonString)->toPHP();
+        if (is_array($result)) {
+            $result = (object) $result;
+        }
         if (property_exists($result, "writeErrors")) {
             // Throws Utopia\Mongo\Exception
             throw new Exception(

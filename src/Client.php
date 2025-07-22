@@ -89,8 +89,6 @@ class Client
             'authcid' => $user,
             'secret' => Auth::encodeCredentials($user, $password)
         ]);
-
-
     }
 
     /**
@@ -139,7 +137,7 @@ class Client
         $params = array_merge($command, [
             '$db' => $db ?? $this->database,
         ]);
-    
+
         $sections = Document::fromPHP($params);
         $message = pack('V*', 21 + strlen($sections), $this->id, 0, 2013, 0) . "\0" . $sections;
         return $this->send($message);
@@ -550,7 +548,7 @@ class Client
     public function upsert(string $collection, array $operations, array $options = []): self
     {
         $updates = [];
-        
+
         foreach ($operations as $op) {
             $cleanUpdate = [];
             foreach ($op['update'] as $k => $v) {
@@ -812,5 +810,4 @@ class Client
         $this->replicaSet = property_exists($result, 'setName');
         return $this->replicaSet;
     }
-
 }

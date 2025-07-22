@@ -19,7 +19,7 @@ class MongoTest extends TestCase
         if (!is_null(self::$db)) {
             return self::$db;
         }
-       
+
         $client = new Client('testing', 'mongo', 27017, 'root', 'example', false);
         $client->connect();
 
@@ -110,7 +110,6 @@ class MongoTest extends TestCase
 
     public function testCreateDocuments(): array
     {
-   
         $docs = $this->getDatabase()->insertMany(
             'movies',
             [
@@ -237,8 +236,8 @@ class MongoTest extends TestCase
                 'country' => 'UK',
                 'counter' => 1
             ]
-        ); 
-    
+        );
+
         $this->getDatabase()->upsert('movies_upsert', [
             [
                 'filter' => ['name' => 'Gone with the wind'],
@@ -262,5 +261,4 @@ class MongoTest extends TestCase
         self::assertEquals('USA', $documents[1]->country);
         self::assertEquals('English', $documents[1]->language);
     }
-
 }

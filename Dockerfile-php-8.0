@@ -13,7 +13,7 @@ RUN composer update --ignore-platform-reqs --optimize-autoloader \
     
 FROM appwrite/utopia-base:php-8.0-0.1.0 as compile
 
-ENV PHP_MONGO_VERSION=1.11.1
+ENV PHP_MONGO_VERSION=2.1.1
     
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 

@@ -197,7 +197,7 @@ class Client
             (!isset($responseLength)) || ($receivedLength < $responseLength)
         );
 
-  /*
+        /*
  * The first 21 bytes of the MongoDB wire protocol response consist of:
  * - 16 bytes: Standard message header, which includes:
  *     - messageLength (4 bytes): Total size of the message, including the header.
@@ -568,7 +568,7 @@ class Client
                     $cleanUpdate[$k] = $v;
                 }
             }
-           
+
             $updateOperation = [
                 'q' => $op['filter'],
                 'u' => $this->toObject($cleanUpdate),

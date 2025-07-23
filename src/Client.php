@@ -2,7 +2,8 @@
 
 namespace Utopia\Mongo;
 
-use MongoDB\BSON;
+use MongoDB\BSON\Document;
+use MongoDB\BSON\ObjectId;
 use Swoole\Client as SwooleClient;
 use Swoole\Coroutine\Client as CoroutineClient;
 use stdClass;
@@ -136,7 +137,7 @@ class Client
             '$db' => $db ?? $this->database,
         ]);
 
-        $sections = BSON\fromPHP($params);
+        $sections = Document::fromPHP($params);
         $message = pack('V*', 21 + strlen($sections), $this->id, 0, 2013, 0) . "\0" . $sections;
         return $this->send($message);
     }
@@ -196,11 +197,24 @@ class Client
             (!isset($responseLength)) || ($receivedLength < $responseLength)
         );
 
-        /**
-         * @var stdClass $result
+        /*
+         * The first 21 bytes of the MongoDB wire protocol response consist of:
+         * - 16 bytes: Standard message header, which includes:
+         *     - messageLength (4 bytes): Total size of the message, including the header.
+         *     - requestID (4 bytes): Identifier for this message.
+         *     - responseTo (4 bytes): The requestID that this message is responding to.
+         *     - opCode (4 bytes): The operation code for the message type (e.g., OP_MSG).
+         * - 4 bytes: flagBits, which provide additional information about the message.
+         * - 1 byte: payloadType, indicating the type of the following payload (usually 0 for a BSON document).
+         *
+         * These 21 bytes are protocol metadata and precede the actual BSON-encoded document in the response.
          */
-        $result = BSON\toPHP(substr($res, 21, $responseLength - 21));
 
+        $bsonString = substr($res, 21, $responseLength - 21);
+        $result = Document::fromBSON($bsonString)->toPHP();
+        if (is_array($result)) {
+            $result = (object) $result;
+        }
         if (property_exists($result, "writeErrors")) {
             // Throws Utopia\Mongo\Exception
             throw new Exception(
@@ -434,7 +448,7 @@ class Client
             $docObj->{$key} = $value;
         }
 
-        $docObj->_id ??= new BSON\ObjectId();
+        $docObj->_id ??= new ObjectId();
 
         $this->query(array_merge([
             self::COMMAND_INSERT => $collection,
@@ -459,7 +473,7 @@ class Client
                 $docObj->{$key} = $value;
             }
 
-            $docObj->_id ??= new BSON\ObjectId();
+            $docObj->_id ??= new ObjectId();
 
             $docObjs[] = $docObj;
         }
@@ -533,47 +547,51 @@ class Client
     }
 
     /**
-     * Insert, or update, a document/s.
+     * Insert, or update, document(s) with support for bulk operations.
      * https://docs.mongodb.com/manual/reference/command/update/#syntax
      *
      * @param string $collection
-     * @param array $where
-     * @param array $updates
+     * @param array $operations Array of operations, each with 'filter' and 'update' keys
      * @param array $options
      *
-     * @return Client
+     * @return self
      * @throws Exception
      */
-
-    public function upsert(string $collection, array $where = [], array $updates = [], array $options = []): self
+    public function upsert(string $collection, array $operations, array $options = []): self
     {
-        $cleanUpdates = [];
+        $updates = [];
 
-        foreach ($updates as $k => $v) {
-            if (\is_null($v)) {
-                continue;
+        foreach ($operations as $op) {
+            $cleanUpdate = [];
+            foreach ($op['update'] as $k => $v) {
+                if (!is_null($v)) {
+                    $cleanUpdate[$k] = $v;
+                }
             }
-            $cleanUpdates[$k] = $v;
-        }
 
+            $updateOperation = [
+                'q' => $op['filter'],
+                'u' => $this->toObject($cleanUpdate),
+                'upsert' => true,
+                'multi' => isset($op['multi']) ? $op['multi'] : false,
+            ];
+
+            $updates[] = $updateOperation;
+        }
 
         $this->query(
             array_merge(
                 [
-                    'update' => $collection,
-                    'updates' => [
-                        [
-                            'q' => ['_uid' => $where['_uid']],
-                            'u' => ['$set' => $cleanUpdates],
-                        ]
-                    ],
+                    self::COMMAND_UPDATE => $collection,
+                    'updates' => $updates,
                 ],
                 $options
             )
         );
-
         return $this;
     }
+
+
 
     /**
      * Find a document/s.
@@ -781,5 +799,27 @@ class Client
         }
 
         return $cleanedFilters;
+    }
+
+    private ?bool $replicaSet = null;
+
+    /**
+     * Check if MongoDB is running as a replica set.
+     *
+     * @return bool True if this is a replica set, false if standalone
+     * @throws Exception
+     */
+    public function isReplicaSet(): bool
+    {
+        if ($this->replicaSet !== null) {
+            return $this->replicaSet;
+        }
+
+        $result = $this->query([
+            'isMaster' => 1,
+        ], 'admin');
+
+        $this->replicaSet = property_exists($result, 'setName');
+        return $this->replicaSet;
     }
 }

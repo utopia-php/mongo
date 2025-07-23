@@ -224,4 +224,41 @@ class MongoTest extends TestCase
             ['maxTimeMS'=> 1]
         )->cursor->firstBatch ?? [];
     }
+
+
+    public function testUpsert()
+    {
+        $this->getDatabase()->insert(
+            'movies_upsert',
+            [
+                'name' => 'Gone with the wind',
+                'language' => 'English',
+                'country' => 'UK',
+                'counter' => 1
+            ]
+        );
+
+        $this->getDatabase()->upsert('movies_upsert', [
+            [
+                'filter' => ['name' => 'Gone with the wind'],
+                'update' => [
+                    '$set' => ['country' => 'USA'],
+                    '$inc' => ['counter' => 3]
+                ]
+            ],
+            [
+                'filter' => ['name' => 'The godfather'],
+                'update' => [
+                    '$set' => ['name' => 'The godfather 2', 'country' => 'USA', 'language' => 'English']
+                ]
+            ],
+        ]);
+
+        $documents = $this->getDatabase()->find('movies_upsert')->cursor->firstBatch ?? [];
+        self::assertCount(2, $documents);
+        self::assertEquals(4, $documents[0]->counter);
+        self::assertEquals('The godfather 2', $documents[1]->name);
+        self::assertEquals('USA', $documents[1]->country);
+        self::assertEquals('English', $documents[1]->language);
+    }
 }

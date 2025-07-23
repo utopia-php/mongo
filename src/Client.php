@@ -38,7 +38,6 @@ class Client
     public const COMMAND_DISTINCT = "distinct";
     public const COMMAND_MAP_REDUCE = "mapReduce";
 
-
     /**
      * Authentication for connection
      */

@@ -2,7 +2,8 @@
 
 namespace Utopia\Mongo;
 
-use MongoDB\BSON;
+use MongoDB\BSON\Document;
+use MongoDB\BSON\ObjectId;
 use Swoole\Client as SwooleClient;
 use Swoole\Coroutine\Client as CoroutineClient;
 use stdClass;
@@ -36,6 +37,10 @@ class Client
     public const COMMAND_AGGREGATE = "aggregate";
     public const COMMAND_DISTINCT = "distinct";
     public const COMMAND_MAP_REDUCE = "mapReduce";
+    public const COMMAND_START_SESSION = "startSession";
+    public const COMMAND_COMMIT_TRANSACTION = "commitTransaction";
+    public const COMMAND_ABORT_TRANSACTION = "abortTransaction";
+    public const COMMAND_END_SESSIONS = "endSessions";
 
     /**
      * Authentication for connection
@@ -136,7 +141,7 @@ class Client
             '$db' => $db ?? $this->database,
         ]);
 
-        $sections = BSON\fromPHP($params);
+        $sections = Document::fromPHP($params);
         $message = pack('V*', 21 + strlen($sections), $this->id, 0, 2013, 0) . "\0" . $sections;
         return $this->send($message);
     }
@@ -196,11 +201,11 @@ class Client
             (!isset($responseLength)) || ($receivedLength < $responseLength)
         );
 
-        /**
-         * @var stdClass $result
-         */
-        $result = BSON\toPHP(substr($res, 21, $responseLength - 21));
-
+        $bsonString = substr($res, 21, $responseLength - 21);
+        $result = Document::fromBSON($bsonString)->toPHP();
+        if (is_array($result)) {
+            $result = (object) $result;
+        }
         if (property_exists($result, "writeErrors")) {
             // Throws Utopia\Mongo\Exception
             throw new Exception(
@@ -434,7 +439,7 @@ class Client
             $docObj->{$key} = $value;
         }
 
-        $docObj->_id ??= new BSON\ObjectId();
+        $docObj->_id ??= new ObjectId();
 
         $this->query(array_merge([
             self::COMMAND_INSERT => $collection,
@@ -459,7 +464,7 @@ class Client
                 $docObj->{$key} = $value;
             }
 
-            $docObj->_id ??= new BSON\ObjectId();
+            $docObj->_id ??= new ObjectId();
 
             $docObjs[] = $docObj;
         }
@@ -533,18 +538,20 @@ class Client
     }
 
     /**
-     * Perform multiple upserts in a single update command (wire protocol batch).
-     * Each operation should have 'filter' and 'update' keys.
+     * Insert, or update, document(s) with support for bulk operations.
+     * https://docs.mongodb.com/manual/reference/command/update/#syntax
      *
      * @param string $collection
-     * @param array $operations
+     * @param array $operations Array of operations, each with 'filter' and 'update' keys
      * @param array $options
+     *
      * @return self
      * @throws Exception
      */
-    public function bulkUpsert(string $collection, array $operations, array $options = []): self
+    public function upsert(string $collection, array $operations, array $options = []): self
     {
         $updates = [];
+
         foreach ($operations as $op) {
             $cleanUpdate = [];
             foreach ($op['update'] as $k => $v) {
@@ -553,12 +560,16 @@ class Client
                 }
             }
 
-            $updates[] = [
+            $updateOperation = [
                 'q' => $op['filter'],
                 'u' => $cleanUpdate,
                 'upsert' => true,
+                'multi' => isset($op['multi']) ? $op['multi'] : false,
             ];
+
+            $updates[] = $updateOperation;
         }
+
         $this->query(
             array_merge(
                 [
@@ -571,48 +582,7 @@ class Client
         return $this;
     }
 
-    /**
-     * Insert, or update, a document/s.
-     * https://docs.mongodb.com/manual/reference/command/update/#syntax
-     *
-     * @param string $collection
-     * @param array $where
-     * @param array $updates
-     * @param array $options
-     *
-     * @return Client
-     * @throws Exception
-     */
 
-    public function upsert(string $collection, array $where = [], array $updates = [], array $options = []): self
-    {
-        $cleanUpdates = [];
-
-        foreach ($updates as $k => $v) {
-            if (\is_null($v)) {
-                continue;
-            }
-            $cleanUpdates[$k] = $v;
-        }
-
-
-        $this->query(
-            array_merge(
-                [
-                    'update' => $collection,
-                    'updates' => [
-                        [
-                            'q' => ['_uid' => $where['_uid']],
-                            'u' => ['$set' => $cleanUpdates],
-                        ]
-                    ],
-                ],
-                $options
-            )
-        );
-
-        return $this;
-    }
 
     /**
      * Find a document/s.
@@ -754,6 +724,100 @@ class Client
     }
 
     /**
+     * Start a new logical session. Returns the session id object..
+     *
+     * @return object
+     * @throws Exception
+     */
+    public function startSession(): object
+    {
+        $result = $this->query([
+            self::COMMAND_START_SESSION => 1
+        ], 'admin');
+
+        return $result->id->id;
+    }
+
+    /**
+     * Commit a transaction.
+     *
+     * @param array $lsid
+     * @param int $txnNumber
+     * @param bool $autocommit
+     * @return mixed
+     * @throws Exception
+     */
+    public function commitTransaction(array $lsid, int $txnNumber, bool $autocommit = false)
+    {
+        $txnNumber =  new \MongoDB\BSON\Int64($txnNumber);
+
+        $result = $this->query([
+            self::COMMAND_COMMIT_TRANSACTION => 1,
+            'lsid' => $lsid,
+            'txnNumber' => $txnNumber,
+            'autocommit' => $autocommit
+        ], 'admin');
+
+        // End the session after successful commit
+        $this->endSessions([$lsid]);
+
+        return $result;
+    }
+
+    /**
+     * Abort (rollback) a transaction.
+     *
+     * @param array $lsid
+     * @param int $txnNumber
+     * @param bool $autocommit
+     * @return mixed
+     * @throws Exception
+     */
+    public function abortTransaction(array $lsid, int $txnNumber, bool $autocommit = false)
+    {
+        $txnNumber = new \MongoDB\BSON\Int64($txnNumber);
+
+        $result = $this->query([
+            self::COMMAND_ABORT_TRANSACTION => 1,
+            'lsid' => $lsid,
+            'txnNumber' => $txnNumber,
+            'autocommit' => $autocommit
+        ], 'admin');
+
+        // End the session after successful rollback
+        $this->endSessions([$lsid]);
+
+        return $result;
+    }
+
+    /**
+     * End sessions.
+     *
+     * @param array $lsids
+     * @param array $options
+     * @return mixed
+     * @throws Exception
+     */
+    public function endSessions(array $lsids, array $options = [])
+    {
+        // Extract session IDs from the format ['id' => sessionId] and format as objects
+        $sessionIds = array_map(function ($lsid) {
+            $sessionId = $lsid['id'] ?? $lsid;
+            return ['id' => $sessionId];
+        }, $lsids);
+
+        return $this->query(
+            array_merge(
+                [
+                    self::COMMAND_END_SESSIONS => $sessionIds,
+                ],
+                $options
+            ),
+            'admin'
+        );
+    }
+
+    /**
      * Convert an assoc array to an object (stdClass).
      *
      * @param array $dict
@@ -820,5 +884,27 @@ class Client
         }
 
         return $cleanedFilters;
+    }
+
+    private ?bool $replicaSet = null;
+
+    /**
+     * Check if MongoDB is running as a replica set.
+     *
+     * @return bool True if this is a replica set, false if standalone
+     * @throws Exception
+     */
+    public function isReplicaSet(): bool
+    {
+        if ($this->replicaSet !== null) {
+            return $this->replicaSet;
+        }
+
+        $result = $this->query([
+            'isMaster' => 1,
+        ], 'admin');
+
+        $this->replicaSet = property_exists($result, 'setName');
+        return $this->replicaSet;
     }
 }

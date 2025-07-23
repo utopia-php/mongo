@@ -226,7 +226,7 @@ class MongoTest extends TestCase
     }
 
 
-    public function testBulkUpsert()
+    public function testUpsert()
     {
         $this->getDatabase()->insert(
             'movies_upsert',
@@ -238,7 +238,7 @@ class MongoTest extends TestCase
             ]
         );
 
-        $this->getDatabase()->bulkUpsert('movies_upsert', [
+        $this->getDatabase()->upsert('movies_upsert', [
             [
                 'filter' => ['name' => 'Gone with the wind'],
                 'update' => [
@@ -255,7 +255,6 @@ class MongoTest extends TestCase
         ]);
 
         $documents = $this->getDatabase()->find('movies_upsert')->cursor->firstBatch ?? [];
-        var_dump($documents);
         self::assertCount(2, $documents);
         self::assertEquals(4, $documents[0]->counter);
         self::assertEquals('The godfather 2', $documents[1]->name);

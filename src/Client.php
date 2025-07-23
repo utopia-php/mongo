@@ -197,6 +197,19 @@ class Client
             (!isset($responseLength)) || ($receivedLength < $responseLength)
         );
 
+  /*
+ * The first 21 bytes of the MongoDB wire protocol response consist of:
+ * - 16 bytes: Standard message header, which includes:
+ *     - messageLength (4 bytes): Total size of the message, including the header.
+ *     - requestID (4 bytes): Identifier for this message.
+ *     - responseTo (4 bytes): The requestID that this message is responding to.
+ *     - opCode (4 bytes): The operation code for the message type (e.g., OP_MSG).
+ * - 4 bytes: flagBits, which provide additional information about the message.
+ * - 1 byte: payloadType, indicating the type of the following payload (usually 0 for a BSON document).
+ *
+ * These 21 bytes are protocol metadata and precede the actual BSON-encoded document in the response.
+ */
+
         $bsonString = substr($res, 21, $responseLength - 21);
         $result = Document::fromBSON($bsonString)->toPHP();
         if (is_array($result)) {
@@ -555,10 +568,10 @@ class Client
                     $cleanUpdate[$k] = $v;
                 }
             }
-
+           
             $updateOperation = [
                 'q' => $op['filter'],
-                'u' => $cleanUpdate,
+                'u' => $this->toObject($cleanUpdate),
                 'upsert' => true,
                 'multi' => isset($op['multi']) ? $op['multi'] : false,
             ];

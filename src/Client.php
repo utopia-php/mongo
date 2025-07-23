@@ -2,7 +2,8 @@
 
 namespace Utopia\Mongo;
 
-use MongoDB\BSON;
+use MongoDB\BSON\Document;
+use MongoDB\BSON\ObjectId;
 use Swoole\Client as SwooleClient;
 use Swoole\Coroutine\Client as CoroutineClient;
 use stdClass;
@@ -141,7 +142,7 @@ class Client
             '$db' => $db ?? $this->database,
         ]);
 
-        $sections = BSON\fromPHP($params);
+        $sections = Document::fromPHP($params);
         $message = pack('V*', 21 + strlen($sections), $this->id, 0, 2013, 0) . "\0" . $sections;
         return $this->send($message);
     }
@@ -201,11 +202,11 @@ class Client
             (!isset($responseLength)) || ($receivedLength < $responseLength)
         );
 
-        /**
-         * @var stdClass $result
-         */
-        $result = BSON\toPHP(substr($res, 21, $responseLength - 21));
-
+        $bsonString = substr($res, 21, $responseLength - 21);
+        $result = Document::fromBSON($bsonString)->toPHP();
+        if (is_array($result)) {
+            $result = (object) $result;
+        }
         if (property_exists($result, "writeErrors")) {
             // Throws Utopia\Mongo\Exception
             throw new Exception(
@@ -439,7 +440,7 @@ class Client
             $docObj->{$key} = $value;
         }
 
-        $docObj->_id ??= new BSON\ObjectId();
+        $docObj->_id ??= new ObjectId();
 
         $this->query(array_merge([
             self::COMMAND_INSERT => $collection,
@@ -464,7 +465,7 @@ class Client
                 $docObj->{$key} = $value;
             }
 
-            $docObj->_id ??= new BSON\ObjectId();
+            $docObj->_id ??= new ObjectId();
 
             $docObjs[] = $docObj;
         }

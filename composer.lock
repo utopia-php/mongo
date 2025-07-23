@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "6def0d090ef1b5df4a7d2af3ea71fe1c",
+    "content-hash": "66c3842bf94f4946d1277b41cf28219d",
     "packages": [
         {
             "name": "mongodb/mongodb",
@@ -648,20 +648,20 @@
         },
         {
             "name": "phpstan/phpstan",
-            "version": "1.8.11",
+            "version": "2.1.19",
             "source": {
                 "type": "git",
                 "url": "https://github.com/phpstan/phpstan.git",
-                "reference": "46e223dd68a620da18855c23046ddb00940b4014"
+                "reference": "473a8c30e450d87099f76313edcbb90852f9afdf"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/phpstan/phpstan/zipball/46e223dd68a620da18855c23046ddb00940b4014",
-                "reference": "46e223dd68a620da18855c23046ddb00940b4014",
+                "url": "https://api.github.com/repos/phpstan/phpstan/zipball/473a8c30e450d87099f76313edcbb90852f9afdf",
+                "reference": "473a8c30e450d87099f76313edcbb90852f9afdf",
                 "shasum": ""
             },
             "require": {
-                "php": "^7.2|^8.0"
+                "php": "^7.4|^8.0"
             },
             "conflict": {
                 "phpstan/phpstan-shim": "*"
@@ -686,8 +686,11 @@
                 "static analysis"
             ],
             "support": {
+                "docs": "https://phpstan.org/user-guide/getting-started",
+                "forum": "https://github.com/phpstan/phpstan/discussions",
                 "issues": "https://github.com/phpstan/phpstan/issues",
-                "source": "https://github.com/phpstan/phpstan/tree/1.8.11"
+                "security": "https://github.com/phpstan/phpstan/security/policy",
+                "source": "https://github.com/phpstan/phpstan-src"
             },
             "funding": [
                 {
@@ -697,13 +700,9 @@
                 {
                     "url": "https://github.com/phpstan",
                     "type": "github"
-                },
-                {
-                    "url": "https://tidelift.com/funding/github/packagist/phpstan/phpstan",
-                    "type": "tidelift"
                 }
             ],
-            "time": "2022-10-24T15:45:13+00:00"
+            "time": "2025-07-21T19:58:24+00:00"
         },
         {
             "name": "phpunit/php-code-coverage",
@@ -2318,7 +2317,7 @@
     "prefer-lowest": false,
     "platform": {
         "php": ">=8.0",
-        "ext-mongodb": "*"
+        "ext-mongodb": "2.1.1"
     },
     "platform-dev": [],
     "plugin-api-version": "2.2.0"

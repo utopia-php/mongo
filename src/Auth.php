@@ -218,7 +218,7 @@ class Auth
     /**
      * @return string
      */
-    public function getCnonce(): string
+    public function getCnonce(): ?string
     {
         return $this->cnonce;
     }

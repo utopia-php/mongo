@@ -37,6 +37,11 @@ class Client
     public const COMMAND_AGGREGATE = "aggregate";
     public const COMMAND_DISTINCT = "distinct";
     public const COMMAND_MAP_REDUCE = "mapReduce";
+    public const COMMAND_START_SESSION = "startSession";
+    public const COMMAND_COMMIT_TRANSACTION = "commitTransaction";
+    public const COMMAND_ABORT_TRANSACTION = "abortTransaction";
+    public const COMMAND_END_SESSIONS = "endSessions";
+
 
     /**
      * Authentication for connection
@@ -730,6 +735,100 @@ class Client
             'pipeline' => $pipeline,
             'cursor' => $this->toObject([]),
         ]);
+    }
+
+    /**
+     * Start a new logical session. Returns the session id object..
+     *
+     * @return object
+     * @throws Exception
+     */
+    public function startSession(): object
+    {
+        $result = $this->query([
+            self::COMMAND_START_SESSION => 1
+        ], 'admin');
+
+        return $result->id->id;
+    }
+
+    /**
+     * Commit a transaction.
+     *
+     * @param array $lsid
+     * @param int $txnNumber
+     * @param bool $autocommit
+     * @return mixed
+     * @throws Exception
+     */
+    public function commitTransaction(array $lsid, int $txnNumber, bool $autocommit = false)
+    {
+        $txnNumber =  new \MongoDB\BSON\Int64($txnNumber);
+
+        $result = $this->query([
+            self::COMMAND_COMMIT_TRANSACTION => 1,
+            'lsid' => $lsid,
+            'txnNumber' => $txnNumber,
+            'autocommit' => $autocommit
+        ], 'admin');
+
+        // End the session after successful commit
+        $this->endSessions([$lsid]);
+
+        return $result;
+    }
+
+    /**
+     * Abort (rollback) a transaction.
+     *
+     * @param array $lsid
+     * @param int $txnNumber
+     * @param bool $autocommit
+     * @return mixed
+     * @throws Exception
+     */
+    public function abortTransaction(array $lsid, int $txnNumber, bool $autocommit = false)
+    {
+        $txnNumber = new \MongoDB\BSON\Int64($txnNumber);
+
+        $result = $this->query([
+            self::COMMAND_ABORT_TRANSACTION => 1,
+            'lsid' => $lsid,
+            'txnNumber' => $txnNumber,
+            'autocommit' => $autocommit
+        ], 'admin');
+
+        // End the session after successful rollback
+        $this->endSessions([$lsid]);
+
+        return $result;
+    }
+
+    /**
+     * End sessions.
+     *
+     * @param array $lsids
+     * @param array $options
+     * @return mixed
+     * @throws Exception
+     */
+    public function endSessions(array $lsids, array $options = [])
+    {
+        // Extract session IDs from the format ['id' => sessionId] and format as objects
+        $sessionIds = array_map(function ($lsid) {
+            $sessionId = $lsid['id'] ?? $lsid;
+            return ['id' => $sessionId];
+        }, $lsids);
+
+        return $this->query(
+            array_merge(
+                [
+                    self::COMMAND_END_SESSIONS => $sessionIds,
+                ],
+                $options
+            ),
+            'admin'
+        );
     }
 
     /**

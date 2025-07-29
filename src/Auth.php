@@ -283,6 +283,6 @@ class Auth
      */
     public static function encodeCredentials($username, $password): string
     {
-        return \md5(\utf8_encode($username . ':mongo:' . $password));
+        return \md5($username . ':mongo:' . $password);
     }
 }

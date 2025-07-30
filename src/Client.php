@@ -9,8 +9,6 @@ use Swoole\Coroutine\Client as CoroutineClient;
 use stdClass;
 use Swoole\Coroutine;
 
-
-
 class Client
 {
     /**
@@ -92,7 +90,7 @@ class Client
         if ($useCoroutine) {
             try {
                 $cid = \Swoole\Coroutine::getCid();
-                if ($cid === false || $cid === 0) {
+                if ($cid === false || $cid < 0) {
                     $useCoroutine = false;
                 }
             } catch (\Throwable $e) {

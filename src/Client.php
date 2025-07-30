@@ -7,6 +7,7 @@ use MongoDB\BSON\ObjectId;
 use Swoole\Client as SwooleClient;
 use Swoole\Coroutine\Client as CoroutineClient;
 use stdClass;
+use Swoole\Coroutine;
 
 class Client
 {
@@ -78,12 +79,24 @@ class Client
         int $port,
         string $user,
         string $password,
-        bool $useCoroutine = true
+        bool $useCoroutine = false
     ) {
         $this->id = uniqid('utopia.mongo.client');
         $this->database = $database;
         $this->host = $host;
         $this->port = $port;
+
+        // Only use coroutines if explicitly requested and we're in a coroutine context
+        if ($useCoroutine) {
+            try {
+                $cid = \Swoole\Coroutine::getCid();
+                if ($cid === false || $cid < 0) {
+                    $useCoroutine = false;
+                }
+            } catch (\Throwable $e) {
+                $useCoroutine = false;
+            }
+        }
 
         $this->client = $useCoroutine
             ? new CoroutineClient(SWOOLE_SOCK_TCP | SWOOLE_KEEP)

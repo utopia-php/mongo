@@ -118,8 +118,11 @@ class Client
         if ($this->client->isConnected()) {
             return $this;
         }
+        
+            if(!$this->client->connect($this->host, $this->port)){
+                throw new \Exception("Failed to connect to MongoDB");
+            }
 
-        $this->client->connect($this->host, $this->port);
         [$payload, $db] = $this->auth->start();
 
         $res = $this->query($payload, $db);

@@ -532,7 +532,6 @@ class Client
      */
     public function update(string $collection, array $where = [], array $updates = [], array $options = [], bool $multi = false): self
     {
-        
         $this->query(
             array_merge([
                 self::COMMAND_UPDATE => $collection,

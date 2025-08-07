@@ -461,10 +461,6 @@ class Client
         $docObj = new stdClass();
 
         foreach ($document as $key => $value) {
-            if (\is_null($value)) {
-                continue;
-            }
-
             $docObj->{$key} = $value;
         }
 
@@ -486,10 +482,6 @@ class Client
             $docObj = new stdClass();
 
             foreach ($document as $key => $value) {
-                if (\is_null($value)) {
-                    continue;
-                }
-
                 $docObj->{$key} = $value;
             }
 
@@ -540,22 +532,14 @@ class Client
      */
     public function update(string $collection, array $where = [], array $updates = [], array $options = [], bool $multi = false): self
     {
-        $cleanUpdates = [];
-
-        foreach ($updates as $k => $v) {
-            if (\is_null($v)) {
-                continue;
-            }
-            $cleanUpdates[$k] = $v;
-        }
-
+        
         $this->query(
             array_merge([
                 self::COMMAND_UPDATE => $collection,
                 'updates' => [
                     [
                         'q' => $this->toObject($where),
-                        'u' => $this->toObject($cleanUpdates),
+                        'u' => $this->toObject($updates),
                         'multi' => $multi,
                         'upsert' => false
                     ]
@@ -582,16 +566,9 @@ class Client
         $updates = [];
 
         foreach ($operations as $op) {
-            $cleanUpdate = [];
-            foreach ($op['update'] as $k => $v) {
-                if (!is_null($v)) {
-                    $cleanUpdate[$k] = $v;
-                }
-            }
-
             $updateOperation = [
                 'q' => $op['filter'],
-                'u' => $this->toObject($cleanUpdate),
+                'u' => $this->toObject($op['update']),
                 'upsert' => true,
                 'multi' => isset($op['multi']) ? $op['multi'] : false,
             ];
@@ -897,12 +874,7 @@ class Client
 
             if (in_array($k, ['$and', '$or', '$nor']) && is_array($v)) {
                 $values = [];
-
                 foreach ($v as $item) {
-                    if (is_null($item)) {
-                        continue;
-                    }
-
                     $values[] = is_array($item) ? $this->toObject($item) : $item;
                 }
 

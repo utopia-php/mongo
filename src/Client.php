@@ -404,8 +404,11 @@ class Client
             if (\array_key_exists('unique', $index) && $index['unique'] == true) {
                 /**
                  * TODO: Unique Indexes are now sparse indexes, which results into incomplete indexes.
+                 * However, if partialFilterExpression is present, we can't use sparse.
                  */
-                $indexes[$key] = \array_merge($index, ['sparse' => true]);
+                if (!\array_key_exists('partialFilterExpression', $index)) {
+                    $indexes[$key] = \array_merge($index, ['sparse' => true]);
+                }
             }
         }
 

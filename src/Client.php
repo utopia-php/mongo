@@ -3,9 +3,9 @@
 namespace Utopia\Mongo;
 
 use MongoDB\BSON\Document;
-use MongoDB\BSON\ObjectId;
 use Swoole\Client as SwooleClient;
 use Swoole\Coroutine\Client as CoroutineClient;
+use Ramsey\Uuid\Uuid;
 use stdClass;
 use Swoole\Coroutine;
 
@@ -133,6 +133,15 @@ class Client
         return $this;
     }
 
+    /**
+     * Create a UUID.
+     * @return string
+     */
+    public function createUuid(): string
+    {
+        return  Uuid::uuid7()->toString();
+    }
+   
     /**
      * Send a raw string query to connection.
      * @param string $qry
@@ -467,7 +476,7 @@ class Client
             $docObj->{$key} = $value;
         }
 
-        $docObj->_id ??= new ObjectId();
+        $docObj->_id ??= $this->createUuid();
 
         $this->query(array_merge([
             self::COMMAND_INSERT => $collection,
@@ -488,7 +497,7 @@ class Client
                 $docObj->{$key} = $value;
             }
 
-            $docObj->_id ??= new ObjectId();
+            $docObj->_id ??= $this->createUuid();
 
             $docObjs[] = $docObj;
         }

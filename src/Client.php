@@ -707,12 +707,15 @@ class Client
      */
     public function count(string $collection, array $filters, array $options): int
     {
+
+        $filters = $this->cleanFilters($filters);
+
         // Use MongoDB's native count command with the working format instad of running find and count the results
         $command = [
             self::COMMAND_COUNT => $collection,
             'query' => $this->toObject($filters),
         ];
-
+        var_dump($command);
         // Add limit if specified
         if (isset($options['limit'])) {
             $command['limit'] = (int)$options['limit'];

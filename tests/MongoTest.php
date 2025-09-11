@@ -298,6 +298,11 @@ class MongoTest extends TestCase
         $total = $this->getDatabase()->count($collectionName, ['number' => ['$lte' => 10]], ['limit' => 3]);
         self::assertEquals(3, $total);
 
+
+        // Test count with $or operator and comparison (should be 2 documents with number <= 2 OR number >= 29)
+        $total = $this->getDatabase()->count($collectionName, ['$or' => [['number' => ['$lte' => 2]], ['number' => ['$gte' => 29]]]], []);
+        self::assertEquals(4, $total);
+
         // Test aggregation count - total documents
         $aggregationResult = $this->getDatabase()->aggregate($collectionName, [
             ['$count' => 'total']
@@ -327,6 +332,20 @@ class MongoTest extends TestCase
         ]);
         self::assertEquals(30, $groupedAggregationResult->cursor->firstBatch[0]->count);
         self::assertEquals('test', $groupedAggregationResult->cursor->firstBatch[0]->_id);
+
+        // Test aggregation count with $or operator
+        $orAggregationResult = $this->getDatabase()->aggregate($collectionName, [
+            ['$match' => ['$or' => [['number' => 5], ['number' => 15], ['number' => 25]]]],
+            ['$count' => 'total']
+        ]);
+        self::assertEquals(3, $orAggregationResult->cursor->firstBatch[0]->total);
+
+        // Test aggregation count with complex $or and range
+        $complexOrAggregationResult = $this->getDatabase()->aggregate($collectionName, [
+            ['$match' => ['$or' => [['number' => ['$lte' => 3]], ['number' => ['$gte' => 28]]]]],
+            ['$count' => 'total']
+        ]);
+        self::assertEquals(6, $complexOrAggregationResult->cursor->firstBatch[0]->total);
 
 
         $this->getDatabase()->dropCollection($collectionName);

@@ -264,10 +264,9 @@ class MongoTest extends TestCase
 
     public function testCountMethod()
     {
-
         $collectionName = 'count_test';
         $this->getDatabase()->createCollection($collectionName);
-        
+
         $documents = [];
         for ($i = 1; $i <= 30; $i++) {
             $documents[] = [
@@ -277,48 +276,48 @@ class MongoTest extends TestCase
                 'created_at' => new \DateTime()
             ];
         }
-        
+
         $this->getDatabase()->insertMany($collectionName, $documents);
-        
+
         $total = $this->getDatabase()->count($collectionName, [], []);
         self::assertEquals(30, $total);
-        
+
         // Test count with filter (should be 1 for each specific number)
         $total = $this->getDatabase()->count($collectionName, ['number' => 15], []);
         self::assertEquals(1, $total);
-        
+
         // Test count with range filter (should be 10 for numbers 1-10)
         $total = $this->getDatabase()->count($collectionName, ['number' => ['$lte' => 10]], []);
         self::assertEquals(10, $total);
-        
+
         // Test count with limit (should be 5 for first 5 documents)
         $total = $this->getDatabase()->count($collectionName, [], ['limit' => 5]);
         self::assertEquals(5, $total);
-        
-       // Test count with filter and limit (should be 3 for first 3 documents with number <= 10)
+
+        // Test count with filter and limit (should be 3 for first 3 documents with number <= 10)
         $total = $this->getDatabase()->count($collectionName, ['number' => ['$lte' => 10]], ['limit' => 3]);
         self::assertEquals(3, $total);
-        
+
         // Test aggregation count - total documents
         $aggregationResult = $this->getDatabase()->aggregate($collectionName, [
             ['$count' => 'total']
         ]);
         self::assertEquals(30, $aggregationResult->cursor->firstBatch[0]->total);
-        
+
         // Test aggregation count with filter
         $filteredAggregationResult = $this->getDatabase()->aggregate($collectionName, [
             ['$match' => ['number' => ['$lte' => 10]]],
             ['$count' => 'total']
         ]);
         self::assertEquals(10, $filteredAggregationResult->cursor->firstBatch[0]->total);
-        
+
         // Test aggregation count with limit
         $limitedAggregationResult = $this->getDatabase()->aggregate($collectionName, [
             ['$limit' => 7],
             ['$count' => 'total']
         ]);
         self::assertEquals(7, $limitedAggregationResult->cursor->firstBatch[0]->total);
-        
+
         // Test aggregation count with group by
         $groupedAggregationResult = $this->getDatabase()->aggregate($collectionName, [
             ['$group' => [
@@ -328,8 +327,8 @@ class MongoTest extends TestCase
         ]);
         self::assertEquals(30, $groupedAggregationResult->cursor->firstBatch[0]->count);
         self::assertEquals('test', $groupedAggregationResult->cursor->firstBatch[0]->_id);
-        
-        
+
+
         $this->getDatabase()->dropCollection($collectionName);
     }
 }

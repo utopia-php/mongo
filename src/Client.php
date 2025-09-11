@@ -707,7 +707,6 @@ class Client
      */
     public function count(string $collection, array $filters, array $options): int
     {
-    
         // Use MongoDB's native count command with the working format instad of running find and count the results
         $command = [
             self::COMMAND_COUNT => $collection,
@@ -718,20 +717,20 @@ class Client
         if (isset($options['limit'])) {
             $command['limit'] = (int)$options['limit'];
         }
-        
+
         // Add skip if specified
         if (isset($options['skip'])) {
             $command['skip'] = (int)$options['skip'];
         }
-        
+
         // Add maxTimeMS if specified
         if (isset($options['maxTimeMS'])) {
             $command['maxTimeMS'] = (int)$options['maxTimeMS'];
         }
-        
+
         try {
-        $result = $this->query($command);
-          return (int)$result;
+            $result = $this->query($command);
+            return (int)$result;
         } catch (Exception $e) {
             return 0;
         }

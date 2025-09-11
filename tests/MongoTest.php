@@ -266,7 +266,7 @@ class MongoTest extends TestCase
     {
         $collectionName = 'count_test';
         $this->getDatabase()->createCollection($collectionName);
-
+        try {
         $documents = [];
         for ($i = 1; $i <= 30; $i++) {
             $documents[] = [
@@ -347,7 +347,8 @@ class MongoTest extends TestCase
         ]);
         self::assertEquals(6, $complexOrAggregationResult->cursor->firstBatch[0]->total);
 
-
-        $this->getDatabase()->dropCollection($collectionName);
+        } finally {
+            $this->getDatabase()->dropCollection($collectionName);
+        }
     }
 }

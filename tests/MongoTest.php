@@ -62,17 +62,17 @@ class MongoTest extends TestCase
         );
 
         $id = (string)$doc['_id'];
-        self::assertEquals(24, strlen($id));
+        self::assertEquals(36, strlen($id));
 
         $doc = $this->getDatabase()->find('movies', ['name' => 'Armageddon'])->cursor->firstBatch ?? [];
         self::assertCount(1, $doc);
 
-        $doc = $this->getDatabase()->find('movies', ['_id' => new ObjectId($id)])->cursor->firstBatch ?? [];
+        $doc = $this->getDatabase()->find('movies', ['_id' => $id])->cursor->firstBatch ?? [];
         self::assertCount(1, $doc);
 
         $doc = $this->getDatabase()->insert('movies', ['9 Monkeys']);
         $id = (string)$doc['_id'];
-        self::assertEquals(24, strlen($id));
+        self::assertEquals(36, strlen($id));
 
         $doc = $this->getDatabase()->insert(
             'movies',

@@ -141,7 +141,7 @@ class Client
     {
         return  Uuid::uuid7()->toString();
     }
-   
+
     /**
      * Send a raw string query to connection.
      * @param string $qry
@@ -476,7 +476,9 @@ class Client
             $docObj->{$key} = $value;
         }
 
-        $docObj->_id ??= $this->createUuid();
+        if (!isset($docObj->_id) || $docObj->_id === '' || $docObj->_id === null) {
+            $docObj->_id = $this->createUuid();
+        }
 
         $this->query(array_merge([
             self::COMMAND_INSERT => $collection,
@@ -497,7 +499,9 @@ class Client
                 $docObj->{$key} = $value;
             }
 
-            $docObj->_id ??= $this->createUuid();
+            if (!isset($docObj->_id) || $docObj->_id === '' || $docObj->_id === null) {
+                $docObj->_id = $this->createUuid();
+            }
 
             $docObjs[] = $docObj;
         }

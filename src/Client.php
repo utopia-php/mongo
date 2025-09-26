@@ -756,17 +756,18 @@ class Client
      *
      * @param string $collection
      * @param array $pipeline
+     * @param array $options
      *
      * @return stdClass
      * @throws Exception
      */
-    public function aggregate(string $collection, array $pipeline): stdClass
+    public function aggregate(string $collection, array $pipeline, array $options = []): stdClass
     {
-        return $this->query([
+        return $this->query(array_merge([
             self::COMMAND_AGGREGATE => $collection,
             'pipeline' => $pipeline,
             'cursor' => $this->toObject([]),
-        ]);
+        ], $options));
     }
 
     /**

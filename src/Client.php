@@ -102,6 +102,15 @@ class Client
             ? new CoroutineClient(SWOOLE_SOCK_TCP | SWOOLE_KEEP)
             : new SwooleClient(SWOOLE_SOCK_TCP | SWOOLE_KEEP);
 
+        // Set socket options to prevent hanging
+        $this->client->set([
+            'open_tcp_keepalive' => true,
+            'tcp_keepidle' => 4,     // Start keepalive after 4s idle
+            'tcp_keepinterval' => 3, // Keepalive interval 3s
+            'tcp_keepcount' => 2,    // Close after 2 failed keepalives
+            'timeout' => 30          // 30 second connection timeout
+        ]);
+
         $this->auth = new Auth([
             'authcid' => $user,
             'secret' => Auth::encodeCredentials($user, $password)

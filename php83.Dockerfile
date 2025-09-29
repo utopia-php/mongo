@@ -1,4 +1,4 @@
-FROM composer:2.0 as composer
+FROM composer:2.0 AS composer
 
 ARG TESTING=false
 ENV TESTING=$TESTING
@@ -33,7 +33,7 @@ RUN \
   && ./configure \
   && make && make install
 
-FROM compile as final
+FROM compile AS final
 
 LABEL maintainer="team@appwrite.io"
 

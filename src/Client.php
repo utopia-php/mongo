@@ -450,7 +450,7 @@ class Client
     }
 
     /**
-     * Insert a document/s.
+     * Insert document.
      * https://docs.mongodb.com/manual/reference/command/insert/#mongodb-dbcommand-dbcmd.insert
      *
      * @param string $collection
@@ -480,30 +480,57 @@ class Client
         return $this->toArray($docObj);
     }
 
+    /**
+     * Insert multiple documents with improved batching for MongoDB 8+ performance.
+     * Automatically handles large datasets by batching operations.
+     *
+     * @param string $collection Collection name
+     * @param array $documents Array of documents to insert
+     * @param array $options Options (ordered, writeConcern, batchSize, etc.)
+     * @return array Array of inserted documents with generated _ids
+     * @throws Exception
+     */
     public function insertMany(string $collection, array $documents, array $options = []): array
     {
-        $docObjs = [];
-
-        foreach ($documents as $document) {
-            $docObj = new stdClass();
-
-            foreach ($document as $key => $value) {
-                $docObj->{$key} = $value;
-            }
-
-            if (!isset($docObj->_id) || $docObj->_id === '' || $docObj->_id === null) {
-                $docObj->_id = $this->createUuid();
-            }
-
-            $docObjs[] = $docObj;
+        if (empty($documents)) {
+            return [];
         }
 
-        $this->query(array_merge([
-            self::COMMAND_INSERT => $collection,
-            'documents' => $docObjs,
-        ], $options));
+        $batchSize = $options['batchSize'] ?? 1000;
+        $ordered = $options['ordered'] ?? true;
+        $insertedDocs = [];
 
-        return $this->toArray($docObjs);
+        // Process documents in batches for better performance
+        $batches = array_chunk($documents, $batchSize);
+
+        foreach ($batches as $batch) {
+            $docObjs = [];
+
+            foreach ($batch as $document) {
+                $docObj = new stdClass();
+
+                foreach ($document as $key => $value) {
+                    $docObj->{$key} = $value;
+                }
+
+                if (!isset($docObj->_id) || $docObj->_id === '' || $docObj->_id === null) {
+                    $docObj->_id = $this->createUuid();
+                }
+
+                $docObjs[] = $docObj;
+            }
+
+            $batchOptions = array_diff_key($options, array_flip(['batchSize']));
+            $this->query(array_merge([
+                self::COMMAND_INSERT => $collection,
+                'documents' => $docObjs,
+                'ordered' => $ordered,
+            ], $batchOptions));
+
+            $insertedDocs = array_merge($insertedDocs, $this->toArray($docObjs));
+        }
+
+        return $insertedDocs;
     }
 
     /**
@@ -596,16 +623,14 @@ class Client
     }
 
 
-
     /**
      * Find a document/s.
      * https://docs.mongodb.com/manual/reference/command/find/#mongodb-dbcommand-dbcmd.find
      *
-     * @param string $collection
-     * @param array $filters
-     * @param array $options
-     *
-     * @return stdClass
+     * @param string $collection Collection name
+     * @param array $filters Query filters
+     * @param array $options Query options
+     * @return stdClass Query result
      * @throws Exception
      */
     public function find(string $collection, array $filters = [], array $options = []): stdClass
@@ -618,6 +643,25 @@ class Client
                 'filter' => $this->toObject($filters),
             ], $options)
         );
+    }
+
+    /**
+     * Aggregate a collection pipeline.
+     *
+     * @param string $collection
+     * @param array $pipeline
+     * @param array $options
+     *
+     * @return stdClass
+     * @throws Exception
+     */
+    public function aggregate(string $collection, array $pipeline, array $options = []): stdClass
+    {
+        return $this->query(array_merge([
+            self::COMMAND_AGGREGATE => $collection,
+            'pipeline' => $pipeline,
+            'cursor' => $this->toObject([]),
+        ], $options));
     }
 
     /**
@@ -714,7 +758,7 @@ class Client
     {
         $filters = $this->cleanFilters($filters);
 
-        // Use MongoDB's native count command with the working format instad of running find and count the results
+        // Use MongoDB's native count command with the working format instead of running find and count the results
         $command = [
             self::COMMAND_COUNT => $collection,
             'query' => $this->toObject($filters),
@@ -743,24 +787,6 @@ class Client
         }
     }
 
-    /**
-     * Aggregate a collection pipeline.
-     *
-     * @param string $collection
-     * @param array $pipeline
-     * @param array $options
-     *
-     * @return stdClass
-     * @throws Exception
-     */
-    public function aggregate(string $collection, array $pipeline, array $options = []): stdClass
-    {
-        return $this->query(array_merge([
-            self::COMMAND_AGGREGATE => $collection,
-            'pipeline' => $pipeline,
-            'cursor' => $this->toObject([]),
-        ], $options));
-    }
 
     /**
      * Start a new logical session. Returns the session id object..

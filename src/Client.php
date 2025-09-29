@@ -3,11 +3,12 @@
 namespace Utopia\Mongo;
 
 use MongoDB\BSON\Document;
-use Swoole\Client as SwooleClient;
-use Swoole\Coroutine\Client as CoroutineClient;
+use MongoDB\Driver\Exception\InvalidArgumentException;
 use Ramsey\Uuid\Uuid;
 use stdClass;
+use Swoole\Client as SwooleClient;
 use Swoole\Coroutine;
+use Swoole\Coroutine\Client as CoroutineClient;
 
 class Client
 {
@@ -42,6 +43,11 @@ class Client
     public const COMMAND_COMMIT_TRANSACTION = "commitTransaction";
     public const COMMAND_ABORT_TRANSACTION = "abortTransaction";
     public const COMMAND_END_SESSIONS = "endSessions";
+    public const COMMAND_LIST_INDEXES = "listIndexes";
+    public const COMMAND_COLLMOD = "collMod";
+
+    // Connection and performance settings
+    private int $defaultMaxTimeMS = 30000; // 30 seconds default
 
 
     /**
@@ -72,6 +78,7 @@ class Client
      * @param string $user
      * @param string $password
      * @param Boolean $useCoroutine
+     * @throws \Exception
      */
     public function __construct(
         string $database,
@@ -81,6 +88,22 @@ class Client
         string $password,
         bool $useCoroutine = false
     ) {
+        if (empty($database)) {
+            throw new \InvalidArgumentException('Database name cannot be empty');
+        }
+        if (empty($host)) {
+            throw new \InvalidArgumentException('Host cannot be empty');
+        }
+        if ($port <= 0 || $port > 65535) {
+            throw new \InvalidArgumentException('Port must be between 1 and 65535');
+        }
+        if (empty($user)) {
+            throw new \InvalidArgumentException('Username cannot be empty');
+        }
+        if (empty($password)) {
+            throw new \InvalidArgumentException('Password cannot be empty');
+        }
+
         $this->id = uniqid('utopia.mongo.client');
         $this->database = $database;
         $this->host = $host;

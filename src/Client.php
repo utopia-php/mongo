@@ -286,10 +286,10 @@ class Client
                     // Add transaction options from startTransaction
                     if (isset($this->sessions[$sessionId]['transactionOptions'])) {
                         $txnOpts = $this->sessions[$sessionId]['transactionOptions'];
-                        if (isset($txnOpts['readConcern'])) {
+                        if (isset($txnOpts['readConcern']) && !isset($command['readConcern'])) {
                             $command['readConcern'] = $txnOpts['readConcern'];
                         }
-                        if (isset($txnOpts['writeConcern'])) {
+                        if (isset($txnOpts['writeConcern']) && !isset($command['writeConcern'])) {
                             $command['writeConcern'] = $txnOpts['writeConcern'];
                         }
                     }
@@ -628,8 +628,8 @@ class Client
             $command['writeConcern'] = $this->createWriteConcern($options['writeConcern']);
         }
 
-        // Add read concern if provided with validation
-        if (isset($options['readConcern'])) {
+        // Add read concern if provided with validation (skip for non-first transaction operations)
+        if (isset($options['readConcern']) && !$this->shouldSkipReadConcern($options)) {
             $command['readConcern'] = $this->createReadConcern($options['readConcern']);
         }
 
@@ -706,8 +706,8 @@ class Client
                 $command['writeConcern'] = $this->createWriteConcern($options['writeConcern']);
             }
 
-            // Add read concern if provided with validation
-            if (isset($options['readConcern'])) {
+            // Add read concern if provided with validation (skip for non-first transaction operations)
+            if (isset($options['readConcern']) && !$this->shouldSkipReadConcern($options)) {
                 $command['readConcern'] = $this->createReadConcern($options['readConcern']);
             }
 
@@ -787,8 +787,8 @@ class Client
             $command['writeConcern'] = $this->createWriteConcern($options['writeConcern']);
         }
 
-        // Add read concern if provided with validation
-        if (isset($options['readConcern'])) {
+        // Add read concern if provided with validation (skip for non-first transaction operations)
+        if (isset($options['readConcern']) && !$this->shouldSkipReadConcern($options)) {
             $command['readConcern'] = $this->createReadConcern($options['readConcern']);
         }
 
@@ -875,8 +875,8 @@ class Client
             $command['session'] = $options['session'];
         }
 
-        // Add read concern if provided with validation
-        if (isset($options['readConcern'])) {
+        // Add read concern if provided with validation (skip for non-first transaction operations)
+        if (isset($options['readConcern']) && !$this->shouldSkipReadConcern($options)) {
             $command['readConcern'] = $this->createReadConcern($options['readConcern']);
         }
 
@@ -924,8 +924,8 @@ class Client
             $command['session'] = $options['session'];
         }
 
-        // Add read concern if provided with validation
-        if (isset($options['readConcern'])) {
+        // Add read concern if provided with validation (skip for non-first transaction operations)
+        if (isset($options['readConcern']) && !$this->shouldSkipReadConcern($options)) {
             $command['readConcern'] = $this->createReadConcern($options['readConcern']);
         }
 
@@ -1032,8 +1032,8 @@ class Client
             $command['writeConcern'] = $this->createWriteConcern($options['writeConcern']);
         }
 
-        // Add read concern if provided with validation
-        if (isset($options['readConcern'])) {
+        // Add read concern if provided with validation (skip for non-first transaction operations)
+        if (isset($options['readConcern']) && !$this->shouldSkipReadConcern($options)) {
             $command['readConcern'] = $this->createReadConcern($options['readConcern']);
         }
 
@@ -1076,8 +1076,8 @@ class Client
             $command['session'] = $options['session'];
         }
 
-        // Add read concern if provided with validation
-        if (isset($options['readConcern'])) {
+        // Add read concern if provided with validation (skip for non-first transaction operations)
+        if (isset($options['readConcern']) && !$this->shouldSkipReadConcern($options)) {
             $command['readConcern'] = $this->createReadConcern($options['readConcern']);
         }
 
@@ -1195,6 +1195,9 @@ class Client
         // We just need to update the session state and store the options
         $sessionState['state'] = self::TRANSACTION_IN_PROGRESS;
         $sessionState['lastUse'] = time();
+
+        // Reset the firstOperationDone flag for the new transaction
+        unset($sessionState['firstOperationDone']);
 
         // Store transaction options for use with actual operations
         $sessionState['transactionOptions'] = [];
@@ -1635,10 +1638,10 @@ class Client
         ];
 
         return in_array($code, $transientCodes) ||
-               str_contains($message, self::TRANSIENT_TRANSACTION_ERROR) ||
-               str_contains($message, 'connection') ||
-               str_contains($message, 'timeout') ||
-               str_contains($message, 'network');
+            str_contains($message, self::TRANSIENT_TRANSACTION_ERROR) ||
+            str_contains($message, 'connection') ||
+            str_contains($message, 'timeout') ||
+            str_contains($message, 'network');
     }
 
     /**
@@ -1666,7 +1669,7 @@ class Client
         ];
 
         return in_array($code, $unknownCommitCodes) ||
-               str_contains($message, self::UNKNOWN_TRANSACTION_COMMIT_RESULT);
+            str_contains($message, self::UNKNOWN_TRANSACTION_COMMIT_RESULT);
     }
 
     /**
@@ -1873,6 +1876,44 @@ class Client
         }
 
         throw new Exception('Invalid write concern format');
+    }
+
+    /**
+     * Check if readConcern should be skipped for a transaction operation
+     *
+     * @param array $options The options array containing session
+     * @return bool True if readConcern should be skipped
+     */
+    private function shouldSkipReadConcern(array $options): bool
+    {
+        if (!isset($options['session'])) {
+            return false;
+        }
+
+        $sessionData = $options['session'];
+
+        // Use the same extraction logic as in query() method
+        $sessionId = null;
+        if (is_array($sessionData) && isset($sessionData['id'])) {
+            $rawId = $sessionData['id']->id ?? null;
+            $sessionId = $rawId instanceof \MongoDB\BSON\Binary
+                ? bin2hex($rawId->getData())
+                : $rawId;
+        } else {
+            $rawId = $sessionData->id ?? null;
+            $sessionId = $rawId instanceof \MongoDB\BSON\Binary
+                ? bin2hex($rawId->getData())
+                : $rawId;
+        }
+
+        // If in transaction and not first operation, skip readConcern
+        if ($sessionId && isset($this->sessions[$sessionId]) &&
+            $this->sessions[$sessionId]['state'] === self::TRANSACTION_IN_PROGRESS &&
+            isset($this->sessions[$sessionId]['firstOperationDone'])) {
+            return true;
+        }
+
+        return false;
     }
 
     /**

@@ -5,9 +5,6 @@ jobs:
   lint:
     name: Tests
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        php-versions: ['8.3'] # add PHP versions as required
 
     steps:
       - name: Checkout repository
@@ -24,7 +21,6 @@ jobs:
 
       - name: Build
         run: |
-          export PHP_VERSION=${{ matrix.php-versions }}
           docker compose build
           docker compose up -d
           sleep 10

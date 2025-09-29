@@ -34,7 +34,7 @@ class Auth
         return [
             [
                 "saslStart" => 1,
-                "mechanism" => "SCRAM-SHA-1",
+                "mechanism" => "SCRAM-SHA-256",
                 "payload" => $payload,
                 "autoAuthorize" => 1,
                 "options" => ["skipEmptyExchange" => true],
@@ -84,9 +84,9 @@ class Auth
 
         if (empty($challenge)) {
             return $this->generateInitialResponse($authcid, $authzid);
-        } else {
-            return $this->generateResponse($challenge, $this->secret);
         }
+
+        return $this->generateResponse($challenge, $this->secret);
     }
 
     /**
@@ -110,10 +110,10 @@ class Auth
      */
     private function generateInitialResponse(string $authcid, string $authzid): string
     {
-        $gs2CbindFlag   = 'n,';
+        $gs2CbindFlag = 'n,';
         $this->gs2Header = $gs2CbindFlag . (!empty($authzid) ? 'a=' . $authzid : '') . ',';
 
-        // I must generate a client nonce and "save" it for later comparison on second response.
+        // Generate a client nonce and "save" it for later comparison on second response.
         $this->cnonce = $this->generateCnonce();
 
         $this->firstMessageBare = 'n=' . $authcid . ',r=' . $this->cnonce;
@@ -124,8 +124,8 @@ class Auth
     /**
      * Parses and verifies a non-empty SCRAM challenge.
      *
-     * @param  string $challenge    The SCRAM challenge
-     * @param  string $password     The password challenge
+     * @param string $challenge The SCRAM challenge
+     * @param string $password The password challenge
      * @return string|false The response to send; false in case of wrong challenge or if an initial response has not
      * been generated first.
      */
@@ -141,7 +141,7 @@ class Auth
             return false;
         }
         $nonce = $matches[1];
-        $salt  = base64_decode($matches[2]);
+        $salt = base64_decode($matches[2]);
 
         if (!$salt) {
             return false;
@@ -153,17 +153,17 @@ class Auth
             return false;
         }
 
-        $channelBinding       = 'c=' . base64_encode($this->gs2Header);
-        $finalMessage         = $channelBinding . ',r=' . $nonce;
-        $saltedPassword       = $this->hi($password, $salt, $i);
+        $channelBinding = 'c=' . base64_encode($this->gs2Header);
+        $finalMessage = $channelBinding . ',r=' . $nonce;
+        $saltedPassword = $this->hi($password, $salt, $i);
         $this->saltedPassword = $saltedPassword;
-        $clientKey            = $this->hmac($saltedPassword, "Client Key");
-        $storedKey            = $this->hash($clientKey);
-        $authMessage          = $this->firstMessageBare . ',' . $challenge . ',' . $finalMessage;
-        $this->authMessage    = $authMessage;
-        $clientSignature      = $this->hmac($storedKey, $authMessage);
-        $clientProof          = $clientKey ^ $clientSignature;
-        $proof                = ',p=' . base64_encode($clientProof);
+        $clientKey = $this->hmac($saltedPassword, "Client Key");
+        $storedKey = $this->hash($clientKey);
+        $authMessage = $this->firstMessageBare . ',' . $challenge . ',' . $finalMessage;
+        $this->authMessage = $authMessage;
+        $clientSignature = $this->hmac($storedKey, $authMessage);
+        $clientProof = $clientKey ^ $clientSignature;
+        $proof = ',p=' . base64_encode($clientProof);
 
         return $finalMessage . $proof;
     }
@@ -171,18 +171,18 @@ class Auth
     /**
      * Hi() call, which is essentially PBKDF2 (RFC-2898) with HMAC-H() as the pseudorandom function.
      *
-     * @param string $str  The string to hash.
+     * @param string $str The string to hash.
      * @param string $salt The salt value.
      * @param int $i The   iteration count.
      * @return string The hashed string.
      */
     private function hi(string $str, string $salt, int $i): string
     {
-        $int1   = "\0\0\0\1";
-        $ui     = $this->hmac($str, $salt . $int1);
+        $int1 = "\0\0\0\1";
+        $ui = $this->hmac($str, $salt . $int1);
         $result = $ui;
         for ($k = 1; $k < $i; $k++) {
-            $ui     = $this->hmac($str, $ui);
+            $ui = $this->hmac($str, $ui);
             $result = $result ^ $ui;
         }
         return $result;
@@ -207,10 +207,10 @@ class Auth
             return false;
         }
 
-        $verifier                = $matches[1];
+        $verifier = $matches[1];
         $proposedServerSignature = base64_decode($verifier);
-        $serverKey               = $this->hmac($this->saltedPassword, "Server Key");
-        $serverSignature         = $this->hmac($serverKey, $this->authMessage);
+        $serverKey = $this->hmac($this->saltedPassword, "Server Key");
+        $serverSignature = $this->hmac($serverKey, $this->authMessage);
 
         return $proposedServerSignature === $serverSignature;
     }
@@ -245,7 +245,7 @@ class Auth
      */
     private function hash($data): string
     {
-        return hash('sha1', $data, true);
+        return hash('sha256', $data, true);
     }
 
     /**
@@ -255,7 +255,7 @@ class Auth
      */
     private function hmac($key, $str): string
     {
-        return hash_hmac('sha1', $str, $key, true);
+        return hash_hmac('sha256', $str, $key, true);
     }
 
     /**
@@ -279,10 +279,17 @@ class Auth
     }
 
     /**
+     * Encode credentials for MongoDB SCRAM-SHA-256
+     * For SCRAM-SHA-256, we store the raw password and let the SCRAM mechanism handle it
+     *
+     * @param string $username
+     * @param string $password
      * @return string
      */
     public static function encodeCredentials($username, $password): string
     {
-        return \md5($username . ':mongo:' . $password);
+        // For SCRAM-SHA-256, return the raw password
+        // The SCRAM mechanism will handle the proper hashing
+        return $password;
     }
 }

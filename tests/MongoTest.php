@@ -221,7 +221,7 @@ class MongoTest extends TestCase
         $this->getDatabase()->find(
             'movies',
             ['$where' => 'sleep(1000) || true'],
-            ['maxTimeMS'=> 1]
+            ['maxTimeMS' => 1]
         )->cursor->firstBatch ?? [];
     }
 

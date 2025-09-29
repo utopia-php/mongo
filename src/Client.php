@@ -112,11 +112,11 @@ class Client
         // Only use coroutines if explicitly requested and we're in a coroutine context
         if ($useCoroutine) {
             try {
-                $cid = \Swoole\Coroutine::getCid();
-                if ($cid === false || $cid < 0) {
+                $cid = Coroutine::getCid();
+                if ($cid <= 0) {
                     $useCoroutine = false;
                 }
-            } catch (\Throwable $e) {
+            } catch (\Throwable) {
                 $useCoroutine = false;
             }
         }
@@ -141,8 +141,7 @@ class Client
     }
 
     /**
-     * Connect to Mongo using TCP/IP
-     * and Wire Protocol.
+     * Connect to MongoDB using TCP/IP and Wire Protocol.
      * @throws Exception
      */
     public function connect(): self
@@ -160,28 +159,19 @@ class Client
 
         [$payload, $db] = $this->auth->continue($res);
 
-        $res = $this->query($payload, $db);
+        $this->query($payload, $db);
 
         return $this;
     }
 
     /**
-     * Create a UUID.
+     * Create a UUID using UUID7 standard for MongoDB _id field.
+     *
      * @return string
      */
     public function createUuid(): string
     {
-        return  Uuid::uuid7()->toString();
-    }
-
-    /**
-     * Send a raw string query to connection.
-     * @param string $qry
-     * @return mixed
-     */
-    public function raw_query(string $qry): mixed
-    {
-        return $this->send($qry);
+        return Uuid::uuid7()->toString();
     }
 
     /**
@@ -203,21 +193,6 @@ class Client
         return $this->send($message);
     }
 
-    /**
-     * Send a synchronous command to connection.
-     */
-    public function blocking(string $cmd): stdClass|array|int
-    {
-        $this->client->send($cmd . PHP_EOL);
-
-        $result = '';
-
-        while ($result = $this->client->recv()) {
-            sleep(1);
-        }
-
-        return $result;
-    }
 
     /**
      * Send a message to connection.
@@ -241,70 +216,55 @@ class Client
         $receivedLength = 0;
         $responseLength = null;
         $res = '';
+        $attempts = 0;
+        $maxAttempts = 10000;
+        $sleepTime = 100;
 
         do {
-            if (($chunk = $this->client->recv()) === false) {
-                sleep(1); // Prevent excessive CPU Load, test lower.
+            $chunk = $this->client->recv();
+
+            if ($chunk === false || $chunk === '') {
+                $attempts++;
+                if ($attempts >= $maxAttempts) {
+                    throw new Exception('Receive timeout: no data received within reasonable time');
+                }
+
+                // Adaptive backoff: shorter delays for coroutines, longer for sync
+                if ($this->client instanceof CoroutineClient) {
+                    Coroutine::sleep(0.001); // 1ms for coroutines
+                } else {
+                    \usleep($sleepTime); // Microsecond precision for sync client
+                    $sleepTime = \min($sleepTime * 1.2, 10000); // Cap at 10ms for faster checking
+                }
                 continue;
             }
 
-            $receivedLength += strlen($chunk);
+            // Reset attempts counter when we receive data
+            $attempts = 0;
+            $sleepTime = 100; // Reset to 0.1ms
+
+            $receivedLength += \strlen($chunk);
             $res .= $chunk;
 
+            // Parse message length from first 4 bytes
             if ((!isset($responseLength)) && (strlen($res) >= 4)) {
-                $responseLength = unpack('Vl', substr($res, 0, 4))['l'];
+                $responseLength = \unpack('Vl', substr($res, 0, 4))['l'];
+
+                // Validate response length before allocating memory to prevent memory exhaustion
+                if ($responseLength > 16777216) { // 16MB limit
+                    throw new Exception('Response too large: ' . $responseLength . ' bytes');
+                }
+
+                // Additional validation for negative or tiny values
+                if ($responseLength < 21) { // Minimum MongoDB message size
+                    throw new Exception('Invalid response length: ' . $responseLength . ' bytes');
+                }
             }
         } while (
             (!isset($responseLength)) || ($receivedLength < $responseLength)
         );
 
-        /*
-         * The first 21 bytes of the MongoDB wire protocol response consist of:
-         * - 16 bytes: Standard message header, which includes:
-         *     - messageLength (4 bytes): Total size of the message, including the header.
-         *     - requestID (4 bytes): Identifier for this message.
-         *     - responseTo (4 bytes): The requestID that this message is responding to.
-         *     - opCode (4 bytes): The operation code for the message type (e.g., OP_MSG).
-         * - 4 bytes: flagBits, which provide additional information about the message.
-         * - 1 byte: payloadType, indicating the type of the following payload (usually 0 for a BSON document).
-         *
-         * These 21 bytes are protocol metadata and precede the actual BSON-encoded document in the response.
-         */
-
-        $bsonString = substr($res, 21, $responseLength - 21);
-        $result = Document::fromBSON($bsonString)->toPHP();
-        if (is_array($result)) {
-            $result = (object) $result;
-        }
-        if (property_exists($result, "writeErrors")) {
-            // Throws Utopia\Mongo\Exception
-            throw new Exception(
-                $result->writeErrors[0]->errmsg,
-                $result->writeErrors[0]->code
-            );
-        }
-
-        if (property_exists($result, 'errmsg')) {
-            // Throws Utopia\Mongo\Exception
-            throw new Exception(
-                'E'.$result->code.' '.$result->codeName.': '.$result->errmsg,
-                $result->code
-            );
-        }
-
-        if (property_exists($result, "n") && $result->ok === 1.0) {
-            return $result->n;
-        }
-
-        if (property_exists($result, "nonce") && $result->ok === 1.0) {
-            return $result;
-        }
-
-        if ($result->ok === 1.0) {
-            return $result;
-        }
-
-        return $result->cursor->firstBatch;
+        return $this->parseResponse($res, $responseLength);
     }
 
     /**
@@ -442,7 +402,7 @@ class Client
     public function createIndexes(string $collection, array $indexes, array $options = []): bool
     {
         foreach ($indexes as $key => $index) {
-            if (\array_key_exists('unique', $index) && $index['unique'] == true) {
+            if ($index['unique'] ?? false) {
                 /**
                  * TODO: Unique Indexes are now sparse indexes, which results into incomplete indexes.
                  * However, if partialFilterExpression is present, we can't use sparse.
@@ -980,5 +940,119 @@ class Client
 
         $this->replicaSet = property_exists($result, 'setName');
         return $this->replicaSet;
+    }
+
+    /**
+     * Close connection and clean up resources.
+     */
+    public function close(): void
+    {
+        if (isset($this->client) && $this->client->isConnected()) {
+            $this->client->close();
+        }
+    }
+
+    /**
+     * Parse MongoDB wire protocol response and handle BSON decoding.
+     *
+     * @param string $response Raw response data
+     * @param int $responseLength Expected response length
+     * @return stdClass|array|int Parsed response
+     * @throws Exception
+     */
+    private function parseResponse(string $response, int $responseLength): stdClass|array|int
+    {
+        /*
+         * The first 21 bytes of the MongoDB wire protocol response consist of:
+         * - 16 bytes: Standard message header, which includes:
+         *     - messageLength (4 bytes): Total size of the message, including the header.
+         *     - requestID (4 bytes): Identifier for this message.
+         *     - responseTo (4 bytes): The requestID that this message is responding to.
+         *     - opCode (4 bytes): The operation code for the message type (e.g., OP_MSG).
+         * - 4 bytes: flagBits, which provide additional information about the message.
+         * - 1 byte: payloadType, indicating the type of the following payload (usually 0 for a BSON document).
+         *
+         * These 21 bytes are protocol metadata and precede the actual BSON-encoded document in the response.
+         */
+
+        if (strlen($response) < 21) {
+            throw new Exception('Invalid response: too short');
+        }
+
+        // Extract message header
+        $header = substr($response, 0, 16);
+        $headerData = unpack('VmessageLength/VrequestID/VresponseTo/VopCode', $header);
+
+        // Validate message length
+        if ($headerData['messageLength'] !== $responseLength) {
+            throw new Exception('Response length mismatch');
+        }
+
+        // Extract flag bits and payload type
+        $flagBits = unpack('V', substr($response, 16, 4))[1];
+        $payloadType = ord(substr($response, 20, 1));
+
+        // Extract BSON document (skip header + flagBits + payloadType)
+        $bsonString = substr($response, 21, $responseLength - 21);
+
+        if (empty($bsonString)) {
+            return new \stdClass();
+        }
+
+        try {
+            // Parse BSON document
+            $result = Document::fromBSON($bsonString)->toPHP();
+
+            // Convert array to stdClass if needed
+            if (is_array($result)) {
+                $result = (object)$result;
+            }
+
+            // Check for write errors (duplicate key, etc.)
+            if (property_exists($result, 'writeErrors') && !empty($result->writeErrors)) {
+                throw new Exception(
+                    $result->writeErrors[0]->errmsg,
+                    $result->writeErrors[0]->code
+                );
+            }
+
+            // Check for general MongoDB errors
+            if (property_exists($result, 'errmsg')) {
+                throw new Exception(
+                    'E' . $result->code . ' ' . $result->codeName . ': ' . $result->errmsg,
+                    $result->code
+                );
+            }
+
+            // Check for operation success
+            if (property_exists($result, 'n') && $result->ok === 1.0) {
+                return $result->n;
+            }
+
+            if (property_exists($result, 'nonce') && $result->ok === 1.0) {
+                return $result;
+            }
+
+            if ($result->ok === 1.0) {
+                return $result;
+            }
+
+            return $result->cursor->firstBatch;
+        } catch (InvalidArgumentException $e) {
+            throw new Exception('Failed to parse BSON response: ' . $e->getMessage());
+        } catch (\Exception $e) {
+            if ($e instanceof Exception) {
+                throw $e; // Re-throw our own exceptions
+            }
+            throw new Exception('Error parsing response: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Destructor to ensure proper cleanup.
+     */
+    public function __destruct()
+    {
+        $this->close();
     }
 }

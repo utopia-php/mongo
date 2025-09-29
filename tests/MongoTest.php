@@ -13,6 +13,7 @@ class MongoTest extends TestCase
 
     /**
      * @throws Exception
+     * @throws \Exception
      */
     public static function getDatabase(): Client
     {
@@ -20,7 +21,15 @@ class MongoTest extends TestCase
             return self::$db;
         }
 
-        $client = new Client('testing', 'mongo', 27017, 'root', 'example', false);
+        $client = new Client(
+            database: 'testing',
+            host: 'mongo',
+            port: 27017,
+            user: 'root',
+            password: 'example',
+            useCoroutine: false
+        );
+
         $client->connect();
 
         self::$db = $client;
@@ -29,7 +38,7 @@ class MongoTest extends TestCase
 
     public function testDeleteDatabase()
     {
-        self::assertTrue($this->getDatabase()->dropDatabase([]));
+        self::assertTrue($this->getDatabase()->dropDatabase());
     }
 
 

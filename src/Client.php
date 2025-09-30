@@ -377,9 +377,9 @@ class Client
      */
     private function receive(): stdClass|array|int
     {
+        $chunks = [];
         $receivedLength = 0;
         $responseLength = null;
-        $res = '';
         $attempts = 0;
         $maxAttempts = 10000;
         $sleepTime = 100;
@@ -407,26 +407,37 @@ class Client
             $attempts = 0;
             $sleepTime = 100; // Reset to 0.1ms
 
-            $receivedLength += \strlen($chunk);
-            $res .= $chunk;
+            $chunkLen = \strlen($chunk);
+            $receivedLength += $chunkLen;
+            $chunks[] = $chunk;
 
             // Parse message length from first 4 bytes
-            if ((!isset($responseLength)) && (strlen($res) >= 4)) {
-                $responseLength = \unpack('Vl', substr($res, 0, 4))['l'];
+            if ($responseLength === null && $receivedLength >= 4) {
+                $firstData = $chunks[0];
+
+                if (\strlen($firstData) < 4) {
+                    $firstData = \implode('', $chunks);
+                }
+
+                $responseLength = \unpack('Vl', substr($firstData, 0, 4))['l'];
 
                 // Validate response length before allocating memory to prevent memory exhaustion
                 if ($responseLength > 16777216) { // 16MB limit
                     throw new Exception('Response too large: ' . $responseLength . ' bytes');
                 }
 
-                // Additional validation for negative or tiny values
+                // Validate for negative or tiny values
                 if ($responseLength < 21) { // Minimum MongoDB message size
                     throw new Exception('Invalid response length: ' . $responseLength . ' bytes');
                 }
             }
-        } while (
-            (!isset($responseLength)) || ($receivedLength < $responseLength)
-        );
+
+            if ($responseLength !== null && $receivedLength >= $responseLength) {
+                break;
+            }
+        } while (true);
+
+        $res = \implode('', $chunks);
 
         return $this->parseResponse($res, $responseLength);
     }
@@ -1569,13 +1580,13 @@ class Client
          * These 21 bytes are protocol metadata and precede the actual BSON-encoded document in the response.
          */
 
-        if (strlen($response) < 21) {
+        if (\strlen($response) < 21) {
             throw new Exception('Invalid response: too short');
         }
 
         // Extract message header
-        $header = substr($response, 0, 16);
-        $headerData = unpack('VmessageLength/VrequestID/VresponseTo/VopCode', $header);
+        $header = \substr($response, 0, 16);
+        $headerData = \unpack('VmessageLength/VrequestID/VresponseTo/VopCode', $header);
 
         // Validate message length
         if ($headerData['messageLength'] !== $responseLength) {
@@ -1583,11 +1594,11 @@ class Client
         }
 
         // Extract flag bits and payload type
-        $flagBits = unpack('V', substr($response, 16, 4))[1];
-        $payloadType = ord(substr($response, 20, 1));
+        $flagBits = \unpack('V', \substr($response, 16, 4))[1];
+        $payloadType = \ord(\substr($response, 20, 1));
 
         // Extract BSON document (skip header + flagBits + payloadType)
-        $bsonString = substr($response, 21, $responseLength - 21);
+        $bsonString = \substr($response, 21, $responseLength - 21);
 
         if (empty($bsonString)) {
             return new \stdClass();
@@ -1598,12 +1609,12 @@ class Client
             $result = Document::fromBSON($bsonString)->toPHP();
 
             // Convert array to stdClass if needed
-            if (is_array($result)) {
+            if (\is_array($result)) {
                 $result = (object)$result;
             }
 
             // Check for write errors (duplicate key, etc.)
-            if (property_exists($result, 'writeErrors') && !empty($result->writeErrors)) {
+            if (\property_exists($result, 'writeErrors') && !empty($result->writeErrors)) {
                 throw new Exception(
                     $result->writeErrors[0]->errmsg,
                     $result->writeErrors[0]->code
@@ -1611,7 +1622,7 @@ class Client
             }
 
             // Check for general MongoDB errors
-            if (property_exists($result, 'errmsg')) {
+            if (\property_exists($result, 'errmsg')) {
                 throw new Exception(
                     'E' . $result->code . ' ' . $result->codeName . ': ' . $result->errmsg,
                     $result->code
@@ -1619,11 +1630,11 @@ class Client
             }
 
             // Check for operation success
-            if (property_exists($result, 'n') && $result->ok === 1.0) {
+            if (\property_exists($result, 'n') && $result->ok === 1.0) {
                 return $result->n;
             }
 
-            if (property_exists($result, 'nonce') && $result->ok === 1.0) {
+            if (\property_exists($result, 'nonce') && $result->ok === 1.0) {
                 return $result;
             }
 
@@ -1636,7 +1647,7 @@ class Client
             throw new Exception('Failed to parse BSON response: ' . $e->getMessage());
         } catch (\Exception $e) {
             if ($e instanceof Exception) {
-                throw $e; // Re-throw our own exceptions
+                throw $e;
             }
             throw new Exception('Error parsing response: ' . $e->getMessage());
         }
@@ -1671,11 +1682,11 @@ class Client
             13436, // NotMasterOrSecondary
         ];
 
-        return in_array($code, $transientCodes) ||
-            str_contains($message, self::TRANSIENT_TRANSACTION_ERROR) ||
-            str_contains($message, 'connection') ||
-            str_contains($message, 'timeout') ||
-            str_contains($message, 'network');
+        return \in_array($code, $transientCodes) ||
+            \str_contains($message, self::TRANSIENT_TRANSACTION_ERROR) ||
+            \str_contains($message, 'connection') ||
+            \str_contains($message, 'timeout') ||
+            \str_contains($message, 'network');
     }
 
     /**
@@ -1702,8 +1713,8 @@ class Client
             13436, // NotMasterOrSecondary
         ];
 
-        return in_array($code, $unknownCommitCodes) ||
-            str_contains($message, self::UNKNOWN_TRANSACTION_COMMIT_RESULT);
+        return \in_array($code, $unknownCommitCodes) ||
+            \str_contains($message, self::UNKNOWN_TRANSACTION_COMMIT_RESULT);
     }
 
     /**
@@ -1769,7 +1780,7 @@ class Client
                 if ($this->isTransientTransactionError($e) && $attempt < $maxRetries) {
                     $attempt++;
                     if ($retryDelayMs > 0) {
-                        usleep($retryDelayMs * 1000);
+                        \usleep($retryDelayMs * 1000);
                     }
                     continue;
                 }

@@ -278,8 +278,11 @@ class Client
                 $command['txnNumber'] = new Int64($this->sessions[$sessionId]['txnNumber']);
                 $command['autocommit'] = false;
 
+                // Check if this is the first operation
+                $isFirstOperation = !isset($this->sessions[$sessionId]['firstOperationDone']);
+
                 // Add the first operation flag for the first operation in the transaction
-                if (!isset($this->sessions[$sessionId]['firstOperationDone'])) {
+                if ($isFirstOperation) {
                     $command['startTransaction'] = true;
                     $this->sessions[$sessionId]['firstOperationDone'] = true;
 
@@ -294,13 +297,40 @@ class Client
                         }
                     }
                 }
+
+                // IMPORTANT: Do NOT add causal consistency readConcern for ANY operation in a transaction
+                // MongoDB transactions provide their own consistency guarantees, and readConcern can only
+                // be specified on the first operation (which is handled above via transactionOptions)
+                // Attempting to add readConcern to subsequent operations will cause E72 InvalidOptions error
+
+                // Remove any readConcern that might have been added before this point for non-first operations
+                if (!$isFirstOperation && isset($command['readConcern'])) {
+                    unset($command['readConcern']);
+                }
+            } else {
+                // Not in a transaction - can add causal consistency readConcern freely
+                if ($this->operationTime !== null && !isset($command['readConcern']['afterClusterTime'])) {
+                    $command['readConcern'] = $command['readConcern'] ?? [];
+                    $command['readConcern']['afterClusterTime'] = $this->operationTime;
+                }
+            }
+        } else {
+            // No session - can add causal consistency readConcern freely (unless explicitly skipped)
+            if (!isset($command['skipReadConcern']) &&
+                $this->operationTime !== null &&
+                !isset($command['readConcern']['afterClusterTime'])) {
+                $command['readConcern'] = $command['readConcern'] ?? [];
+                $command['readConcern']['afterClusterTime'] = $this->operationTime;
             }
         }
 
-        // Add causal consistency support
-        if ($this->operationTime !== null && !isset($command['readConcern']['afterClusterTime'])) {
-            $command['readConcern'] = $command['readConcern'] ?? [];
-            $command['readConcern']['afterClusterTime'] = $this->operationTime;
+        // Remove internal flag before sending to MongoDB
+        unset($command['skipReadConcern']);
+
+        // CRITICAL: Remove readConcern from any non-first operation in a transaction
+        // MongoDB will reject commands with readConcern that have txnNumber but not startTransaction
+        if (isset($command['txnNumber']) && !isset($command['startTransaction']) && isset($command['readConcern'])) {
+            unset($command['readConcern']);
         }
 
         // Add cluster time for causal consistency
@@ -466,7 +496,7 @@ class Client
      */
     public function createCollection(string $name, array $options = []): bool
     {
-        $list = $this->listCollectionNames(["name" => $name]);
+        $list = $this->listCollectionNames(["name" => $name], $options);
 
         if (\count($list->cursor->firstBatch) > 0) {
             throw new Exception('Collection Exists');
@@ -1251,7 +1281,8 @@ class Client
             self::COMMAND_COMMIT_TRANSACTION => 1,
             'lsid' => $sessionState['id'],
             'txnNumber' => new Int64($sessionState['txnNumber']),
-            'autocommit' => false
+            'autocommit' => false,
+            'skipReadConcern' => true  // Internal flag to prevent adding readConcern
         ];
 
         // Add write concern if provided
@@ -1320,7 +1351,8 @@ class Client
             self::COMMAND_ABORT_TRANSACTION => 1,
             'lsid' => $sessionState['id'],
             'txnNumber' => new Int64($sessionState['txnNumber']),
-            'autocommit' => false
+            'autocommit' => false,
+            'skipReadConcern' => true  // Internal flag to prevent adding readConcern
         ];
 
         // Add maxTimeMS if provided
@@ -1365,7 +1397,7 @@ class Client
 
                 // Warn about active transactions
                 if ($sessionState['state'] === self::TRANSACTION_IN_PROGRESS) {
-                    error_log("Warning: Ending session with active transaction. Transaction will be aborted.");
+                    \error_log("Warning: Ending session with active transaction. Transaction will be aborted.");
                 }
 
                 $sessionIds[] = $sessionState['id'];
@@ -1497,8 +1529,10 @@ class Client
                     $this->endSessions($activeSessions);
                 }
             } catch (Exception $e) {
-                // Log error but don't prevent closing
-                error_log("Error ending sessions during close: " . $e->getMessage());
+                // Silently ignore if connection is already lost during cleanup
+                if (!str_contains($e->getMessage(), 'Connection to MongoDB has been lost')) {
+                    \error_log("Error ending sessions during close: " . $e->getMessage());
+                }
             }
         }
 
@@ -1727,7 +1761,7 @@ class Client
                         $this->abortTransaction($session);
                     } catch (Exception $abortError) {
                         // Log abort error but don't mask original error
-                        error_log("Error aborting transaction: " . $abortError->getMessage());
+                        \error_log("Error aborting transaction: " . $abortError->getMessage());
                     }
                     throw $e;
                 }
@@ -2006,7 +2040,7 @@ class Client
             try {
                 $this->endSessions($staleSessions);
             } catch (Exception $e) {
-                error_log("Error cleaning up stale sessions: " . $e->getMessage());
+                \error_log("Error cleaning up stale sessions: " . $e->getMessage());
             }
         }
     }

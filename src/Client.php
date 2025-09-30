@@ -3,11 +3,13 @@
 namespace Utopia\Mongo;
 
 use MongoDB\BSON\Document;
-use Swoole\Client as SwooleClient;
-use Swoole\Coroutine\Client as CoroutineClient;
+use MongoDB\BSON\Int64;
+use MongoDB\Driver\Exception\InvalidArgumentException;
 use Ramsey\Uuid\Uuid;
 use stdClass;
+use Swoole\Client as SwooleClient;
 use Swoole\Coroutine;
+use Swoole\Coroutine\Client as CoroutineClient;
 
 class Client
 {
@@ -20,6 +22,26 @@ class Client
      * Socket (sync or async) client.
      */
     private SwooleClient|CoroutineClient $client;
+
+    /**
+     * Active sessions with transaction state tracking.
+     */
+    private array $sessions = [];
+
+    /**
+     * Current cluster time for causal consistency.
+     */
+    private ?object $clusterTime = null;
+
+    /**
+     * Current operation time for causal consistency.
+     */
+    private ?object $operationTime = null;
+
+    /**
+     * Connection status flag.
+     */
+    private bool $isConnected = false;
 
     /**
      * Defines commands Mongo uses over wire protocol.
@@ -42,6 +64,38 @@ class Client
     public const COMMAND_COMMIT_TRANSACTION = "commitTransaction";
     public const COMMAND_ABORT_TRANSACTION = "abortTransaction";
     public const COMMAND_END_SESSIONS = "endSessions";
+    public const COMMAND_LIST_INDEXES = "listIndexes";
+    public const COMMAND_COLLMOD = "collMod";
+
+    // Connection and performance settings
+    private int $defaultMaxTimeMS = 30000; // 30 seconds default
+
+    // Transaction error codes for retry logic
+    public const TRANSIENT_TRANSACTION_ERROR = 'TransientTransactionError';
+    public const UNKNOWN_TRANSACTION_COMMIT_RESULT = 'UnknownTransactionCommitResult';
+    public const TRANSACTION_TIMEOUT_ERROR = 50;
+    public const TRANSACTION_ABORTED_ERROR = 251;
+
+    // Transaction states
+    public const TRANSACTION_NONE = 'none';
+    public const TRANSACTION_STARTING = 'starting';
+    public const TRANSACTION_IN_PROGRESS = 'in_progress';
+    public const TRANSACTION_COMMITTED = 'committed';
+    public const TRANSACTION_ABORTED = 'aborted';
+
+    // Read concerns
+    public const READ_CONCERN_LOCAL = 'local';
+    public const READ_CONCERN_AVAILABLE = 'available';
+    public const READ_CONCERN_MAJORITY = 'majority';
+    public const READ_CONCERN_LINEARIZABLE = 'linearizable';
+    public const READ_CONCERN_SNAPSHOT = 'snapshot';
+
+    // Read preferences
+    public const READ_PREFERENCE_PRIMARY = 'primary';
+    public const READ_PREFERENCE_SECONDARY = 'secondary';
+    public const READ_PREFERENCE_PRIMARY_PREFERRED = 'primaryPreferred';
+    public const READ_PREFERENCE_SECONDARY_PREFERRED = 'secondaryPreferred';
+    public const READ_PREFERENCE_NEAREST = 'nearest';
 
 
     /**
@@ -72,6 +126,7 @@ class Client
      * @param string $user
      * @param string $password
      * @param Boolean $useCoroutine
+     * @throws \Exception
      */
     public function __construct(
         string $database,
@@ -81,6 +136,22 @@ class Client
         string $password,
         bool $useCoroutine = false
     ) {
+        if (empty($database)) {
+            throw new \InvalidArgumentException('Database name cannot be empty');
+        }
+        if (empty($host)) {
+            throw new \InvalidArgumentException('Host cannot be empty');
+        }
+        if ($port <= 0 || $port > 65535) {
+            throw new \InvalidArgumentException('Port must be between 1 and 65535');
+        }
+        if (empty($user)) {
+            throw new \InvalidArgumentException('Username cannot be empty');
+        }
+        if (empty($password)) {
+            throw new \InvalidArgumentException('Password cannot be empty');
+        }
+
         $this->id = uniqid('utopia.mongo.client');
         $this->database = $database;
         $this->host = $host;
@@ -89,11 +160,11 @@ class Client
         // Only use coroutines if explicitly requested and we're in a coroutine context
         if ($useCoroutine) {
             try {
-                $cid = \Swoole\Coroutine::getCid();
-                if ($cid === false || $cid < 0) {
+                $cid = Coroutine::getCid();
+                if ($cid <= 0) {
                     $useCoroutine = false;
                 }
-            } catch (\Throwable $e) {
+            } catch (\Throwable) {
                 $useCoroutine = false;
             }
         }
@@ -102,6 +173,15 @@ class Client
             ? new CoroutineClient(SWOOLE_SOCK_TCP | SWOOLE_KEEP)
             : new SwooleClient(SWOOLE_SOCK_TCP | SWOOLE_KEEP);
 
+        // Set socket options to prevent hanging
+        $this->client->set([
+            'open_tcp_keepalive' => true,
+            'tcp_keepidle' => 4,     // Start keepalive after 4s idle
+            'tcp_keepinterval' => 3, // Keepalive interval 3s
+            'tcp_keepcount' => 2,    // Close after 2 failed keepalives
+            'timeout' => 30          // 30 second connection timeout
+        ]);
+
         $this->auth = new Auth([
             'authcid' => $user,
             'secret' => Auth::encodeCredentials($user, $password)
@@ -109,8 +189,7 @@ class Client
     }
 
     /**
-     * Connect to Mongo using TCP/IP
-     * and Wire Protocol.
+     * Connect to MongoDB using TCP/IP and Wire Protocol.
      * @throws Exception
      */
     public function connect(): self
@@ -118,9 +197,24 @@ class Client
         if ($this->client->isConnected()) {
             return $this;
         }
+
+        // Validate connection parameters before attempting connection
+        $validateConnectionParams = function () {
+            if (empty($this->host)) {
+                throw new Exception('MongoDB host cannot be empty');
+            }
+            if ($this->port <= 0 || $this->port > 65535) {
+                throw new Exception('MongoDB port must be between 1 and 65535');
+            }
+        };
+
+        $validateConnectionParams();
+
         if (!$this->client->connect($this->host, $this->port)) {
             throw new Exception("Failed to connect to MongoDB at {$this->host}:{$this->port}");
         }
+
+        $this->isConnected = true;
 
         [$payload, $db] = $this->auth->start();
 
@@ -128,64 +222,141 @@ class Client
 
         [$payload, $db] = $this->auth->continue($res);
 
-        $res = $this->query($payload, $db);
+        $this->query($payload, $db);
 
         return $this;
     }
 
     /**
-     * Create a UUID.
+     * Create a UUID using UUID7 standard for MongoDB _id field.
+     *
      * @return string
      */
     public function createUuid(): string
     {
-        return  Uuid::uuid7()->toString();
+        return Uuid::uuid7()->toString();
     }
 
     /**
-     * Send a raw string query to connection.
-     * @param string $qry
-     * @return mixed
-     */
-    public function raw_query(string $qry): mixed
-    {
-        return $this->send($qry);
-    }
-
-    /**
-     * Send a BSON packed query to connection.
+     * Send a BSON packed query to connection with comprehensive session, causal consistency, and transaction support.
      *
-     * @param array<string, mixed> $command
-     * @param string|null $db
-     * @return stdClass|array|int
+     * @param array<string, mixed> $command Command to execute
+     * @param string|null $db Database name
+     * @return stdClass|array|int Query result
      * @throws Exception
      */
     public function query(array $command, ?string $db = null): stdClass|array|int
     {
+        // Validate connection state before each operation
+        $this->validateConnection();
+
+        $sessionId = null;
+
+        // Extract and process session from options if provided
+        if (isset($command['session'])) {
+            $sessionData = $command['session'];
+            unset($command['session']);
+
+            // Handle different session formats
+            if (is_array($sessionData) && isset($sessionData['id'])) {
+                $command['lsid'] = $sessionData['id'];
+                $rawId = $sessionData['id']->id ?? null;
+                $sessionId = $rawId instanceof \MongoDB\BSON\Binary
+                    ? bin2hex($rawId->getData())
+                    : $rawId;
+            } else {
+                $command['lsid'] = $sessionData;
+                $rawId = $sessionData->id ?? null;
+                $sessionId = $rawId instanceof \MongoDB\BSON\Binary
+                    ? bin2hex($rawId->getData())
+                    : $rawId;
+            }
+
+            // Add transaction parameters if session is in transaction
+            if ($sessionId && isset($this->sessions[$sessionId]) &&
+                $this->sessions[$sessionId]['state'] === self::TRANSACTION_IN_PROGRESS) {
+                $command['txnNumber'] = new Int64($this->sessions[$sessionId]['txnNumber']);
+                $command['autocommit'] = false;
+
+                // Check if this is the first operation
+                $isFirstOperation = !isset($this->sessions[$sessionId]['firstOperationDone']);
+
+                // Add the first operation flag for the first operation in the transaction
+                if ($isFirstOperation) {
+                    $command['startTransaction'] = true;
+                    $this->sessions[$sessionId]['firstOperationDone'] = true;
+
+                    // Add transaction options from startTransaction
+                    if (isset($this->sessions[$sessionId]['transactionOptions'])) {
+                        $txnOpts = $this->sessions[$sessionId]['transactionOptions'];
+                        if (isset($txnOpts['readConcern']) && !isset($command['readConcern'])) {
+                            $command['readConcern'] = $txnOpts['readConcern'];
+                        }
+                        if (isset($txnOpts['writeConcern']) && !isset($command['writeConcern'])) {
+                            $command['writeConcern'] = $txnOpts['writeConcern'];
+                        }
+                    }
+                }
+
+                // IMPORTANT: Do NOT add causal consistency readConcern for ANY operation in a transaction
+                // MongoDB transactions provide their own consistency guarantees, and readConcern can only
+                // be specified on the first operation (which is handled above via transactionOptions)
+                // Attempting to add readConcern to subsequent operations will cause E72 InvalidOptions error
+
+                // Remove any readConcern that might have been added before this point for non-first operations
+                if (!$isFirstOperation && isset($command['readConcern'])) {
+                    unset($command['readConcern']);
+                }
+            } else {
+                // Not in a transaction - can add causal consistency readConcern freely
+                if ($this->operationTime !== null && !isset($command['readConcern']['afterClusterTime'])) {
+                    $command['readConcern'] = $command['readConcern'] ?? [];
+                    $command['readConcern']['afterClusterTime'] = $this->operationTime;
+                }
+            }
+        } else {
+            // No session - can add causal consistency readConcern freely (unless explicitly skipped)
+            if (!isset($command['skipReadConcern']) &&
+                $this->operationTime !== null &&
+                !isset($command['readConcern']['afterClusterTime'])) {
+                $command['readConcern'] = $command['readConcern'] ?? [];
+                $command['readConcern']['afterClusterTime'] = $this->operationTime;
+            }
+        }
+
+        // Remove internal flag before sending to MongoDB
+        unset($command['skipReadConcern']);
+
+        // CRITICAL: Remove readConcern from any non-first operation in a transaction
+        // MongoDB will reject commands with readConcern that have txnNumber but not startTransaction
+        if (isset($command['txnNumber']) && !isset($command['startTransaction']) && isset($command['readConcern'])) {
+            unset($command['readConcern']);
+        }
+
+        // Add cluster time for causal consistency
+        if ($this->clusterTime !== null) {
+            $command['$clusterTime'] = $this->clusterTime;
+        }
+
         $params = array_merge($command, [
             '$db' => $db ?? $this->database,
         ]);
 
         $sections = Document::fromPHP($params);
         $message = pack('V*', 21 + strlen($sections), $this->id, 0, 2013, 0) . "\0" . $sections;
-        return $this->send($message);
-    }
+        $result = $this->send($message);
 
-    /**
-     * Send a synchronous command to connection.
-     */
-    public function blocking(string $cmd): stdClass|array|int
-    {
-        $this->client->send($cmd . PHP_EOL);
+        // Update causal consistency timestamps from response
+        $this->updateCausalConsistency($result);
 
-        $result = '';
-
-        while ($result = $this->client->recv()) {
-            sleep(1);
+        // Update session last use time if session was provided
+        if ($sessionId && isset($this->sessions[$sessionId])) {
+            $this->sessions[$sessionId]['lastUse'] = time();
         }
 
         return $result;
     }
+
 
     /**
      * Send a message to connection.
@@ -206,73 +377,69 @@ class Client
      */
     private function receive(): stdClass|array|int
     {
+        $chunks = [];
         $receivedLength = 0;
         $responseLength = null;
-        $res = '';
+        $attempts = 0;
+        $maxAttempts = 10000;
+        $sleepTime = 100;
 
         do {
-            if (($chunk = $this->client->recv()) === false) {
-                sleep(1); // Prevent excessive CPU Load, test lower.
+            $chunk = $this->client->recv();
+
+            if ($chunk === false || $chunk === '') {
+                $attempts++;
+                if ($attempts >= $maxAttempts) {
+                    throw new Exception('Receive timeout: no data received within reasonable time');
+                }
+
+                // Adaptive backoff: shorter delays for coroutines, longer for sync
+                if ($this->client instanceof CoroutineClient) {
+                    Coroutine::sleep(0.001); // 1ms for coroutines
+                } else {
+                    \usleep($sleepTime); // Microsecond precision for sync client
+                    $sleepTime = \min($sleepTime * 1.2, 10000); // Cap at 10ms for faster checking
+                }
                 continue;
             }
 
-            $receivedLength += strlen($chunk);
-            $res .= $chunk;
+            // Reset attempts counter when we receive data
+            $attempts = 0;
+            $sleepTime = 100; // Reset to 0.1ms
 
-            if ((!isset($responseLength)) && (strlen($res) >= 4)) {
-                $responseLength = unpack('Vl', substr($res, 0, 4))['l'];
+            $chunkLen = \strlen($chunk);
+            $receivedLength += $chunkLen;
+            $chunks[] = $chunk;
+
+            // Parse message length from first 4 bytes
+            if ($responseLength === null && $receivedLength >= 4) {
+                $firstData = $chunks[0];
+
+                if (\strlen($firstData) < 4) {
+                    $firstData = \implode('', $chunks);
+                }
+
+                $responseLength = \unpack('Vl', substr($firstData, 0, 4))['l'];
+
+                // Validate response length before allocating memory to prevent memory exhaustion
+                if ($responseLength > 16777216) { // 16MB limit
+                    throw new Exception('Response too large: ' . $responseLength . ' bytes');
+                }
+
+                // Validate for negative or tiny values
+                if ($responseLength < 21) { // Minimum MongoDB message size
+                    throw new Exception('Invalid response length: ' . $responseLength . ' bytes');
+                }
             }
-        } while (
-            (!isset($responseLength)) || ($receivedLength < $responseLength)
-        );
 
-        /*
-         * The first 21 bytes of the MongoDB wire protocol response consist of:
-         * - 16 bytes: Standard message header, which includes:
-         *     - messageLength (4 bytes): Total size of the message, including the header.
-         *     - requestID (4 bytes): Identifier for this message.
-         *     - responseTo (4 bytes): The requestID that this message is responding to.
-         *     - opCode (4 bytes): The operation code for the message type (e.g., OP_MSG).
-         * - 4 bytes: flagBits, which provide additional information about the message.
-         * - 1 byte: payloadType, indicating the type of the following payload (usually 0 for a BSON document).
-         *
-         * These 21 bytes are protocol metadata and precede the actual BSON-encoded document in the response.
-         */
+            if ($responseLength !== null && $receivedLength >= $responseLength) {
+                break;
+            }
+        } while (true);
 
-        $bsonString = substr($res, 21, $responseLength - 21);
-        $result = Document::fromBSON($bsonString)->toPHP();
-        if (is_array($result)) {
-            $result = (object) $result;
-        }
-        if (property_exists($result, "writeErrors")) {
-            // Throws Utopia\Mongo\Exception
-            throw new Exception(
-                $result->writeErrors[0]->errmsg,
-                $result->writeErrors[0]->code
-            );
-        }
+        $res = \implode('', $chunks);
 
-        if (property_exists($result, 'errmsg')) {
-            // Throws Utopia\Mongo\Exception
-            throw new Exception(
-                'E'.$result->code.' '.$result->codeName.': '.$result->errmsg,
-                $result->code
-            );
-        }
-
-        if (property_exists($result, "n") && $result->ok === 1.0) {
-            return $result->n;
-        }
-
-        if (property_exists($result, "nonce") && $result->ok === 1.0) {
-            return $result;
-        }
-
-        if ($result->ok === 1.0) {
-            return $result;
-        }
-
-        return $result->cursor->firstBatch;
+        return $this->parseResponse($res, $responseLength);
     }
 
     /**
@@ -340,7 +507,7 @@ class Client
      */
     public function createCollection(string $name, array $options = []): bool
     {
-        $list = $this->listCollectionNames(["name" => $name]);
+        $list = $this->listCollectionNames(["name" => $name], $options);
 
         if (\count($list->cursor->firstBatch) > 0) {
             throw new Exception('Collection Exists');
@@ -410,7 +577,7 @@ class Client
     public function createIndexes(string $collection, array $indexes, array $options = []): bool
     {
         foreach ($indexes as $key => $index) {
-            if (\array_key_exists('unique', $index) && $index['unique'] == true) {
+            if ($index['unique'] ?? false) {
                 /**
                  * TODO: Unique Indexes are now sparse indexes, which results into incomplete indexes.
                  * However, if partialFilterExpression is present, we can't use sparse.
@@ -458,14 +625,20 @@ class Client
     }
 
     /**
-     * Insert a document/s.
+     * Insert document with full transaction and session support.
      * https://docs.mongodb.com/manual/reference/command/insert/#mongodb-dbcommand-dbcmd.insert
      *
-     * @param string $collection
-     * @param array $document
-     * @param array $options
+     * @param string $collection Collection name
+     * @param array $document Document to insert
+     * @param array $options Options array supporting:
+     *   - session: Session object for transactions
+     *   - writeConcern: Write concern specification
+     *   - readConcern: Read concern specification
+     *   - readPreference: Read preference
+     *   - maxTimeMS: Operation timeout in milliseconds
+     *   - ordered: Whether to stop on first error (default: true)
      *
-     * @return array
+     * @return array Inserted document with _id
      * @throws Exception
      */
     public function insert(string $collection, array $document, array $options = []): array
@@ -480,38 +653,115 @@ class Client
             $docObj->_id = $this->createUuid();
         }
 
-        $this->query(array_merge([
+        // Build command with session and concerns
+        $command = [
             self::COMMAND_INSERT => $collection,
             'documents' => [$docObj],
-        ], $options));
+        ];
+
+        // Add session if provided
+        if (isset($options['session'])) {
+            $command['session'] = $options['session'];
+        }
+
+        // Add write concern if provided with validation
+        if (isset($options['writeConcern'])) {
+            $command['writeConcern'] = $this->createWriteConcern($options['writeConcern']);
+        }
+
+        // Add read concern if provided with validation (skip for non-first transaction operations)
+        if (isset($options['readConcern']) && !$this->shouldSkipReadConcern($options)) {
+            $command['readConcern'] = $this->createReadConcern($options['readConcern']);
+        }
+
+        // Add other options (excluding those we've already handled)
+        $otherOptions = array_diff_key($options, array_flip(['session', 'writeConcern', 'readConcern']));
+        $command = array_merge($command, $otherOptions);
+
+        $this->query($command);
 
         return $this->toArray($docObj);
     }
 
+    /**
+     * Insert multiple documents with improved batching for MongoDB 8+ performance.
+     * Automatically handles large datasets by batching operations with full transaction support.
+     *
+     * @param string $collection Collection name
+     * @param array $documents Array of documents to insert
+     * @param array $options Options array supporting:
+     *   - session: Session object for transactions
+     *   - writeConcern: Write concern specification
+     *   - readConcern: Read concern specification
+     *   - readPreference: Read preference
+     *   - maxTimeMS: Operation timeout in milliseconds
+     *   - ordered: Whether to stop on first error (default: true)
+     *   - batchSize: Number of documents per batch (default: 1000)
+     * @return array Array of inserted documents with generated _ids
+     * @throws Exception
+     */
     public function insertMany(string $collection, array $documents, array $options = []): array
     {
-        $docObjs = [];
-
-        foreach ($documents as $document) {
-            $docObj = new stdClass();
-
-            foreach ($document as $key => $value) {
-                $docObj->{$key} = $value;
-            }
-
-            if (!isset($docObj->_id) || $docObj->_id === '' || $docObj->_id === null) {
-                $docObj->_id = $this->createUuid();
-            }
-
-            $docObjs[] = $docObj;
+        if (empty($documents)) {
+            return [];
         }
 
-        $this->query(array_merge([
-            self::COMMAND_INSERT => $collection,
-            'documents' => $docObjs,
-        ], $options));
+        $batchSize = $options['batchSize'] ?? 1000;
+        $ordered = $options['ordered'] ?? true;
+        $insertedDocs = [];
 
-        return $this->toArray($docObjs);
+        // Process documents in batches for better performance
+        $batches = array_chunk($documents, $batchSize);
+
+        foreach ($batches as $batch) {
+            $docObjs = [];
+
+            foreach ($batch as $document) {
+                $docObj = new stdClass();
+
+                foreach ($document as $key => $value) {
+                    $docObj->{$key} = $value;
+                }
+
+                if (!isset($docObj->_id) || $docObj->_id === '' || $docObj->_id === null) {
+                    $docObj->_id = $this->createUuid();
+                }
+
+                $docObjs[] = $docObj;
+            }
+
+            // Build command with session and concerns
+            $command = [
+                self::COMMAND_INSERT => $collection,
+                'documents' => $docObjs,
+                'ordered' => $ordered,
+            ];
+
+            // Add session if provided
+            if (isset($options['session'])) {
+                $command['session'] = $options['session'];
+            }
+
+            // Add write concern if provided with validation
+            if (isset($options['writeConcern'])) {
+                $command['writeConcern'] = $this->createWriteConcern($options['writeConcern']);
+            }
+
+            // Add read concern if provided with validation (skip for non-first transaction operations)
+            if (isset($options['readConcern']) && !$this->shouldSkipReadConcern($options)) {
+                $command['readConcern'] = $this->createReadConcern($options['readConcern']);
+            }
+
+            // Add other options (excluding those we've already handled)
+            $otherOptions = array_diff_key($options, array_flip(['session', 'writeConcern', 'readConcern', 'batchSize']));
+            $command = array_merge($command, $otherOptions);
+
+            $this->query($command);
+
+            $insertedDocs = array_merge($insertedDocs, $this->toArray($docObjs));
+        }
+
+        return $insertedDocs;
     }
 
     /**
@@ -534,33 +784,60 @@ class Client
     }
 
     /**
-     * Update a document/s.
+     * Update document(s) with full transaction and session support.
      * https://docs.mongodb.com/manual/reference/command/update/#syntax
      *
-     * @param string $collection
-     * @param array $where
-     * @param array $updates
-     * @param array $options
-     * @param bool $multi
+     * @param string $collection Collection name
+     * @param array $where Filter criteria
+     * @param array $updates Update operations
+     * @param array $options Options array supporting:
+     *   - session: Session object for transactions
+     *   - writeConcern: Write concern specification
+     *   - readConcern: Read concern specification
+     *   - readPreference: Read preference
+     *   - maxTimeMS: Operation timeout in milliseconds
+     *   - upsert: Whether to insert if no match found
+     *   - arrayFilters: Array filters for updates
+     * @param bool $multi Whether to update multiple documents
      *
      * @return Client
      * @throws Exception
      */
     public function update(string $collection, array $where = [], array $updates = [], array $options = [], bool $multi = false): self
     {
-        $this->query(
-            array_merge([
-                self::COMMAND_UPDATE => $collection,
-                'updates' => [
-                    [
-                        'q' => $this->toObject($where),
-                        'u' => $this->toObject($updates),
-                        'multi' => $multi,
-                        'upsert' => false
-                    ]
+        // Build command with session and concerns
+        $command = [
+            self::COMMAND_UPDATE => $collection,
+            'updates' => [
+                [
+                    'q' => $this->toObject($where),
+                    'u' => $this->toObject($updates),
+                    'multi' => $multi,
+                    'upsert' => $options['upsert'] ?? false
                 ]
-            ], $options)
-        );
+            ]
+        ];
+
+        // Add session if provided
+        if (isset($options['session'])) {
+            $command['session'] = $options['session'];
+        }
+
+        // Add write concern if provided with validation
+        if (isset($options['writeConcern'])) {
+            $command['writeConcern'] = $this->createWriteConcern($options['writeConcern']);
+        }
+
+        // Add read concern if provided with validation (skip for non-first transaction operations)
+        if (isset($options['readConcern']) && !$this->shouldSkipReadConcern($options)) {
+            $command['readConcern'] = $this->createReadConcern($options['readConcern']);
+        }
+
+        // Add other options (excluding those we've already handled)
+        $otherOptions = array_diff_key($options, array_flip(['session', 'writeConcern', 'readConcern', 'upsert']));
+        $command = array_merge($command, $otherOptions);
+
+        $this->query($command);
 
         return $this;
     }
@@ -604,28 +881,105 @@ class Client
     }
 
 
-
     /**
-     * Find a document/s.
+     * Find document(s) with full transaction and session support.
      * https://docs.mongodb.com/manual/reference/command/find/#mongodb-dbcommand-dbcmd.find
      *
-     * @param string $collection
-     * @param array $filters
-     * @param array $options
-     *
-     * @return stdClass
+     * @param string $collection Collection name
+     * @param array $filters Query filters
+     * @param array $options Options array supporting:
+     *   - session: Session object for transactions
+     *   - readConcern: Read concern specification
+     *   - readPreference: Read preference
+     *   - maxTimeMS: Operation timeout in milliseconds
+     *   - limit: Maximum number of documents to return
+     *   - skip: Number of documents to skip
+     *   - sort: Sort specification
+     *   - projection: Field projection specification
+     *   - hint: Index hint
+     *   - allowPartialResults: Allow partial results from sharded clusters
+     * @return stdClass Query result
      * @throws Exception
      */
     public function find(string $collection, array $filters = [], array $options = []): stdClass
     {
         $filters = $this->cleanFilters($filters);
 
-        return $this->query(
-            array_merge([
-                self::COMMAND_FIND => $collection,
-                'filter' => $this->toObject($filters),
-            ], $options)
-        );
+        // Build command with session and concerns
+        $command = [
+            self::COMMAND_FIND => $collection,
+            'filter' => $this->toObject($filters),
+        ];
+
+        // Add session if provided
+        if (isset($options['session'])) {
+            $command['session'] = $options['session'];
+        }
+
+        // Add read concern if provided with validation (skip for non-first transaction operations)
+        if (isset($options['readConcern']) && !$this->shouldSkipReadConcern($options)) {
+            $command['readConcern'] = $this->createReadConcern($options['readConcern']);
+        }
+
+        // Add read preference if provided
+        if (isset($options['readPreference'])) {
+            $command['$readPreference'] = $options['readPreference'];
+        }
+
+        // Add other options (excluding those we've already handled)
+        $otherOptions = array_diff_key($options, array_flip(['session', 'readConcern', 'readPreference']));
+        $command = array_merge($command, $otherOptions);
+
+        return $this->query($command);
+    }
+
+    /**
+     * Aggregate a collection pipeline with full transaction and session support.
+     *
+     * @param string $collection Collection name
+     * @param array $pipeline Aggregation pipeline
+     * @param array $options Options array supporting:
+     *   - session: Session object for transactions
+     *   - readConcern: Read concern specification
+     *   - readPreference: Read preference
+     *   - maxTimeMS: Operation timeout in milliseconds
+     *   - allowDiskUse: Allow using disk for large result sets
+     *   - batchSize: Batch size for cursor
+     *   - hint: Index hint
+     *   - explain: Return query execution plan
+     *
+     * @return stdClass Aggregation result
+     * @throws Exception
+     */
+    public function aggregate(string $collection, array $pipeline, array $options = []): stdClass
+    {
+        // Build command with session and concerns
+        $command = [
+            self::COMMAND_AGGREGATE => $collection,
+            'pipeline' => $pipeline,
+            'cursor' => $this->toObject([]),
+        ];
+
+        // Add session if provided
+        if (isset($options['session'])) {
+            $command['session'] = $options['session'];
+        }
+
+        // Add read concern if provided with validation (skip for non-first transaction operations)
+        if (isset($options['readConcern']) && !$this->shouldSkipReadConcern($options)) {
+            $command['readConcern'] = $this->createReadConcern($options['readConcern']);
+        }
+
+        // Add read preference if provided
+        if (isset($options['readPreference'])) {
+            $command['$readPreference'] = $options['readPreference'];
+        }
+
+        // Add other options (excluding those we've already handled)
+        $otherOptions = array_diff_key($options, array_flip(['session', 'readConcern', 'readPreference']));
+        $command = array_merge($command, $otherOptions);
+
+        return $this->query($command);
     }
 
     /**
@@ -673,60 +1027,105 @@ class Client
     }
 
     /**
-     * Delete a document/s.
+     * Delete document(s) with full transaction and session support.
      * https://docs.mongodb.com/manual/reference/command/delete/#mongodb-dbcommand-dbcmd.delete
      *
-     * @param string $collection
-     * @param array $filters
-     * @param int $limit
-     * @param array $deleteOptions
-     * @param array $options
+     * @param string $collection Collection name
+     * @param array $filters Delete filters
+     * @param int $limit Maximum number of documents to delete
+     * @param array $deleteOptions Delete operation options
+     * @param array $options Options array supporting:
+     *   - session: Session object for transactions
+     *   - writeConcern: Write concern specification
+     *   - readConcern: Read concern specification
+     *   - readPreference: Read preference
+     *   - maxTimeMS: Operation timeout in milliseconds
+     *   - hint: Index hint
      *
-     * @return int
+     * @return int Number of deleted documents
      * @throws Exception
      */
     public function delete(string $collection, array $filters = [], int $limit = 1, array $deleteOptions = [], array $options = []): int
     {
-        return $this->query(
-            array_merge(
-                [
-                    self::COMMAND_DELETE => $collection,
-                    'deletes' => [
-                        $this->toObject(
-                            array_merge(
-                                [
-                                    'q' => $this->toObject($filters),
-                                    'limit' => $limit,
-                                ],
-                                $deleteOptions
-                            )
-                        ),
-                    ]
-                ],
-                $options
-            )
-        );
+        // Build command with session and concerns
+        $command = [
+            self::COMMAND_DELETE => $collection,
+            'deletes' => [
+                $this->toObject(
+                    array_merge(
+                        [
+                            'q' => $this->toObject($filters),
+                            'limit' => $limit,
+                        ],
+                        $deleteOptions
+                    )
+                ),
+            ]
+        ];
+
+        // Add session if provided
+        if (isset($options['session'])) {
+            $command['session'] = $options['session'];
+        }
+
+        // Add write concern if provided with validation
+        if (isset($options['writeConcern'])) {
+            $command['writeConcern'] = $this->createWriteConcern($options['writeConcern']);
+        }
+
+        // Add read concern if provided with validation (skip for non-first transaction operations)
+        if (isset($options['readConcern']) && !$this->shouldSkipReadConcern($options)) {
+            $command['readConcern'] = $this->createReadConcern($options['readConcern']);
+        }
+
+        // Add other options (excluding those we've already handled)
+        $otherOptions = array_diff_key($options, array_flip(['session', 'writeConcern', 'readConcern']));
+        $command = array_merge($command, $otherOptions);
+
+        return $this->query($command);
     }
 
     /**
-     * Count documents.
+     * Count documents with full transaction and session support.
      *
-     * @param string $collection
-     * @param array $filters
-     * @param array $options
+     * @param string $collection Collection name
+     * @param array $filters Query filters
+     * @param array $options Options array supporting:
+     *   - session: Session object for transactions
+     *   - readConcern: Read concern specification
+     *   - readPreference: Read preference
+     *   - maxTimeMS: Operation timeout in milliseconds
+     *   - limit: Maximum number of documents to count
+     *   - skip: Number of documents to skip
+     *   - hint: Index hint
      *
-     * @return int
+     * @return int Number of matching documents
      * @throws Exception
      */
     public function count(string $collection, array $filters, array $options): int
     {
         $filters = $this->cleanFilters($filters);
 
-        // Use MongoDB's native count command with the working format instad of running find and count the results
+        // Use MongoDB's native count command with the working format instead of running find and count the results
         $command = [
             self::COMMAND_COUNT => $collection,
             'query' => $this->toObject($filters),
         ];
+
+        // Add session if provided
+        if (isset($options['session'])) {
+            $command['session'] = $options['session'];
+        }
+
+        // Add read concern if provided with validation (skip for non-first transaction operations)
+        if (isset($options['readConcern']) && !$this->shouldSkipReadConcern($options)) {
+            $command['readConcern'] = $this->createReadConcern($options['readConcern']);
+        }
+
+        // Add read preference if provided
+        if (isset($options['readPreference'])) {
+            $command['$readPreference'] = $options['readPreference'];
+        }
 
         // Add limit if specified
         if (isset($options['limit'])) {
@@ -743,6 +1142,10 @@ class Client
             $command['maxTimeMS'] = (int)$options['maxTimeMS'];
         }
 
+        // Add other options (excluding those we've already handled)
+        $otherOptions = array_diff_key($options, array_flip(['session', 'readConcern', 'readPreference', 'limit', 'skip', 'maxTimeMS']));
+        $command = array_merge($command, $otherOptions);
+
         try {
             $result = $this->query($command);
             return (int)$result;
@@ -751,107 +1154,277 @@ class Client
         }
     }
 
-    /**
-     * Aggregate a collection pipeline.
-     *
-     * @param string $collection
-     * @param array $pipeline
-     * @param array $options
-     *
-     * @return stdClass
-     * @throws Exception
-     */
-    public function aggregate(string $collection, array $pipeline, array $options = []): stdClass
-    {
-        return $this->query(array_merge([
-            self::COMMAND_AGGREGATE => $collection,
-            'pipeline' => $pipeline,
-            'cursor' => $this->toObject([]),
-        ], $options));
-    }
 
     /**
-     * Start a new logical session. Returns the session id object..
+     * Start a new logical session with comprehensive state tracking for transactions.
      *
-     * @return object
+     * @param array $options Session options supporting:
+     *   - causalConsistency: Enable causal consistency (default: true)
+     *   - defaultTransactionOptions: Default transaction options
+     * @return array Session object with comprehensive state tracking
      * @throws Exception
      */
-    public function startSession(): object
+    public function startSession(array $options = []): array
     {
+        $sessionOptions = [
+            'causalConsistency' => $options['causalConsistency'] ?? true
+        ];
+
+        if (isset($options['defaultTransactionOptions'])) {
+            $sessionOptions['defaultTransactionOptions'] = $options['defaultTransactionOptions'];
+        }
+
         $result = $this->query([
-            self::COMMAND_START_SESSION => 1
+            self::COMMAND_START_SESSION => 1,
+            'options' => $sessionOptions
         ], 'admin');
 
-        return $result->id->id;
+        // Convert BSON\Binary to string for use as array key
+        $sessionId = $result->id->id instanceof \MongoDB\BSON\Binary
+            ? bin2hex($result->id->id->getData())
+            : (string)$result->id->id;
+
+        // Initialize session state tracking
+        $this->sessions[$sessionId] = [
+            'id' => $result->id,
+            'state' => self::TRANSACTION_NONE,
+            'txnNumber' => 0,
+            'lastUse' => time(),
+            'operationTime' => null,
+            'clusterTime' => null,
+            'options' => $sessionOptions,
+            'retryableWriteNumber' => 0
+        ];
+
+        return ['id' => $result->id, 'sessionId' => $sessionId];
     }
 
     /**
-     * Commit a transaction.
+     * Start a new transaction on a session with comprehensive state management.
      *
-     * @param array $lsid
-     * @param int $txnNumber
-     * @param bool $autocommit
-     * @return mixed
+     * @param array $session Session from startSession()
+     * @param array $options Transaction options supporting:
+     *   - readConcern: Read concern specification
+     *   - writeConcern: Write concern specification
+     *   - readPreference: Read preference
+     *   - maxCommitTimeMS: Maximum time to allow for commit
+     * @return bool Success status
      * @throws Exception
      */
-    public function commitTransaction(array $lsid, int $txnNumber, bool $autocommit = false)
+    public function startTransaction(array $session, array $options = []): bool
     {
-        $txnNumber =  new \MongoDB\BSON\Int64($txnNumber);
+        $rawId = $session['sessionId'] ?? ($session['id']->id ?? null);
+        $sessionId = $rawId instanceof \MongoDB\BSON\Binary
+            ? bin2hex($rawId->getData())
+            : $rawId;
 
-        $result = $this->query([
+        if (!$sessionId || !isset($this->sessions[$sessionId])) {
+            throw new Exception('Invalid session provided to startTransaction');
+        }
+
+        $sessionState = &$this->sessions[$sessionId];
+
+        // Check current transaction state
+        if ($sessionState['state'] === self::TRANSACTION_IN_PROGRESS) {
+            throw new Exception('Session already has a transaction in progress');
+        }
+
+        // Increment transaction number for new transaction
+        $sessionState['txnNumber']++;
+
+        // In MongoDB, transactions are started implicitly with the first operation
+        // We just need to update the session state and store the options
+        $sessionState['state'] = self::TRANSACTION_IN_PROGRESS;
+        $sessionState['lastUse'] = time();
+
+        // Reset the firstOperationDone flag for the new transaction
+        unset($sessionState['firstOperationDone']);
+
+        // Store transaction options for use with actual operations
+        $sessionState['transactionOptions'] = [];
+
+        // Store read/write concerns if provided
+        if (isset($options['readConcern'])) {
+            $sessionState['transactionOptions']['readConcern'] = $options['readConcern'];
+        }
+        if (isset($options['writeConcern'])) {
+            $sessionState['transactionOptions']['writeConcern'] = $options['writeConcern'];
+        }
+        if (isset($options['readPreference'])) {
+            $sessionState['transactionOptions']['readPreference'] = $options['readPreference'];
+        }
+        if (isset($options['maxCommitTimeMS'])) {
+            $sessionState['transactionOptions']['maxCommitTimeMS'] = $options['maxCommitTimeMS'];
+        }
+
+        return true;
+    }
+
+    /**
+     * Commit a transaction with comprehensive state management and retry support.
+     *
+     * @param array $session Session from startSession()
+     * @param array $options Commit options supporting:
+     *   - writeConcern: Write concern specification
+     *   - maxTimeMS: Maximum time for commit operation
+     * @return mixed Commit result
+     * @throws Exception
+     */
+    public function commitTransaction(array $session, array $options = [])
+    {
+        $rawId = $session['sessionId'] ?? ($session['id']->id ?? null);
+        $sessionId = $rawId instanceof \MongoDB\BSON\Binary
+            ? bin2hex($rawId->getData())
+            : $rawId;
+
+        if (!$sessionId || !isset($this->sessions[$sessionId])) {
+            throw new Exception('Invalid session provided to commitTransaction');
+        }
+
+        $sessionState = &$this->sessions[$sessionId];
+
+        // Check current transaction state
+        if ($sessionState['state'] !== self::TRANSACTION_IN_PROGRESS) {
+            throw new Exception('No active transaction to commit');
+        }
+
+        $command = [
             self::COMMAND_COMMIT_TRANSACTION => 1,
-            'lsid' => $lsid,
-            'txnNumber' => $txnNumber,
-            'autocommit' => $autocommit
-        ], 'admin');
+            'lsid' => $sessionState['id'],
+            'txnNumber' => new Int64($sessionState['txnNumber']),
+            'autocommit' => false,
+            'skipReadConcern' => true  // Internal flag to prevent adding readConcern
+        ];
 
-        // End the session after successful commit
-        $this->endSessions([$lsid]);
+        // Add write concern if provided
+        if (isset($options['writeConcern'])) {
+            $command['writeConcern'] = $options['writeConcern'];
+        }
 
-        return $result;
+        // Add maxTimeMS if provided
+        if (isset($options['maxTimeMS'])) {
+            $command['maxTimeMS'] = $options['maxTimeMS'];
+        }
+
+        try {
+            $result = $this->query($command, 'admin');
+
+            if ($result->ok === 1.0) {
+                $sessionState['state'] = self::TRANSACTION_COMMITTED;
+                $sessionState['lastUse'] = time();
+                unset($sessionState['firstOperationDone']); // Reset for next transaction
+            } else {
+                $sessionState['state'] = self::TRANSACTION_ABORTED;
+            }
+
+            return $result;
+        } catch (Exception $e) {
+            // Handle specific commit errors
+            if ($this->isTransientTransactionError($e) || $this->isUnknownTransactionCommitResult($e)) {
+                // Keep transaction state for retry
+                throw $e;
+            }
+
+            $sessionState['state'] = self::TRANSACTION_ABORTED;
+            throw $e;
+        }
     }
 
     /**
-     * Abort (rollback) a transaction.
+     * Abort (rollback) a transaction with comprehensive state management.
      *
-     * @param array $lsid
-     * @param int $txnNumber
-     * @param bool $autocommit
-     * @return mixed
+     * @param array $session Session from startSession()
+     * @param array $options Abort options supporting:
+     *   - maxTimeMS: Maximum time for abort operation
+     * @return mixed Abort result
      * @throws Exception
      */
-    public function abortTransaction(array $lsid, int $txnNumber, bool $autocommit = false)
+    public function abortTransaction(array $session, array $options = [])
     {
-        $txnNumber = new \MongoDB\BSON\Int64($txnNumber);
+        $rawId = $session['sessionId'] ?? ($session['id']->id ?? null);
+        $sessionId = $rawId instanceof \MongoDB\BSON\Binary
+            ? bin2hex($rawId->getData())
+            : $rawId;
 
-        $result = $this->query([
+        if (!$sessionId || !isset($this->sessions[$sessionId])) {
+            throw new Exception('Invalid session provided to abortTransaction');
+        }
+
+        $sessionState = &$this->sessions[$sessionId];
+
+        // Check current transaction state
+        if ($sessionState['state'] !== self::TRANSACTION_IN_PROGRESS &&
+            $sessionState['state'] !== self::TRANSACTION_STARTING) {
+            throw new Exception('No active transaction to abort');
+        }
+
+        $command = [
             self::COMMAND_ABORT_TRANSACTION => 1,
-            'lsid' => $lsid,
-            'txnNumber' => $txnNumber,
-            'autocommit' => $autocommit
-        ], 'admin');
+            'lsid' => $sessionState['id'],
+            'txnNumber' => new Int64($sessionState['txnNumber']),
+            'autocommit' => false,
+            'skipReadConcern' => true  // Internal flag to prevent adding readConcern
+        ];
 
-        // End the session after successful rollback
-        $this->endSessions([$lsid]);
+        // Add maxTimeMS if provided
+        if (isset($options['maxTimeMS'])) {
+            $command['maxTimeMS'] = $options['maxTimeMS'];
+        }
 
-        return $result;
+        try {
+            $result = $this->query($command, 'admin');
+            $sessionState['state'] = self::TRANSACTION_ABORTED;
+            $sessionState['lastUse'] = time();
+            unset($sessionState['firstOperationDone']); // Reset for next transaction
+            return $result;
+        } catch (Exception $e) {
+            // Even if abort fails, mark transaction as aborted
+            $sessionState['state'] = self::TRANSACTION_ABORTED;
+            unset($sessionState['firstOperationDone']); // Reset for next transaction
+            throw $e;
+        }
     }
 
     /**
-     * End sessions.
+     * End sessions with proper state cleanup and validation.
      *
-     * @param array $lsids
-     * @param array $options
-     * @return mixed
+     * @param array $sessions Array of session objects from startSession()
+     * @param array $options End session options
+     * @return mixed Result of end sessions command
      * @throws Exception
      */
-    public function endSessions(array $lsids, array $options = [])
+    public function endSessions(array $sessions, array $options = [])
     {
-        // Extract session IDs from the format ['id' => sessionId] and format as objects
-        $sessionIds = array_map(function ($lsid) {
-            $sessionId = $lsid['id'] ?? $lsid;
-            return ['id' => $sessionId];
-        }, $lsids);
+        $sessionIds = [];
+
+        foreach ($sessions as $session) {
+            $rawId = $session['sessionId'] ?? ($session['id']->id ?? null);
+            $sessionId = $rawId instanceof \MongoDB\BSON\Binary
+                ? bin2hex($rawId->getData())
+                : $rawId;
+
+            if ($sessionId && isset($this->sessions[$sessionId])) {
+                $sessionState = $this->sessions[$sessionId];
+
+                // Warn about active transactions
+                if ($sessionState['state'] === self::TRANSACTION_IN_PROGRESS) {
+                    \error_log("Warning: Ending session with active transaction. Transaction will be aborted.");
+                }
+
+                $sessionIds[] = $sessionState['id'];
+
+                // Clean up local session state
+                unset($this->sessions[$sessionId]);
+            } else {
+                // Handle legacy format
+                $sessionId = $session['id'] ?? $session;
+                $sessionIds[] = $sessionId;
+            }
+        }
+
+        if (empty($sessionIds)) {
+            return new \stdClass(); // Return empty result if no valid sessions
+        }
 
         return $this->query(
             array_merge(
@@ -895,7 +1468,7 @@ class Client
         }
 
         if (is_object($obj) || is_array($obj)) {
-            $ret = (array) $obj;
+            $ret = (array)$obj;
             foreach ($ret as $item) {
                 $item = $this->toArray($item);
             }
@@ -948,5 +1521,546 @@ class Client
 
         $this->replicaSet = property_exists($result, 'setName');
         return $this->replicaSet;
+    }
+
+    /**
+     * Close connection and clean up resources including active sessions.
+     */
+    public function close(): void
+    {
+        // End any active sessions before closing connection
+        if (!empty($this->sessions)) {
+            try {
+                $activeSessions = [];
+                foreach ($this->sessions as $sessionId => $sessionData) {
+                    $activeSessions[] = ['id' => $sessionData['id'], 'sessionId' => $sessionId];
+                }
+
+                if (!empty($activeSessions)) {
+                    $this->endSessions($activeSessions);
+                }
+            } catch (Exception $e) {
+                // Silently ignore if connection is already lost during cleanup
+                if (!str_contains($e->getMessage(), 'Connection to MongoDB has been lost')) {
+                    \error_log("Error ending sessions during close: " . $e->getMessage());
+                }
+            }
+        }
+
+        if (isset($this->client) && $this->client->isConnected()) {
+            $this->client->close();
+        }
+
+        $this->isConnected = false;
+        $this->sessions = [];
+        $this->clusterTime = null;
+        $this->operationTime = null;
+    }
+
+    /**
+     * Parse MongoDB wire protocol response and handle BSON decoding.
+     *
+     * @param string $response Raw response data
+     * @param int $responseLength Expected response length
+     * @return stdClass|array|int Parsed response
+     * @throws Exception
+     */
+    private function parseResponse(string $response, int $responseLength): stdClass|array|int
+    {
+        /*
+         * The first 21 bytes of the MongoDB wire protocol response consist of:
+         * - 16 bytes: Standard message header, which includes:
+         *     - messageLength (4 bytes): Total size of the message, including the header.
+         *     - requestID (4 bytes): Identifier for this message.
+         *     - responseTo (4 bytes): The requestID that this message is responding to.
+         *     - opCode (4 bytes): The operation code for the message type (e.g., OP_MSG).
+         * - 4 bytes: flagBits, which provide additional information about the message.
+         * - 1 byte: payloadType, indicating the type of the following payload (usually 0 for a BSON document).
+         *
+         * These 21 bytes are protocol metadata and precede the actual BSON-encoded document in the response.
+         */
+
+        if (\strlen($response) < 21) {
+            throw new Exception('Invalid response: too short');
+        }
+
+        // Extract message header
+        $header = \substr($response, 0, 16);
+        $headerData = \unpack('VmessageLength/VrequestID/VresponseTo/VopCode', $header);
+
+        // Validate message length
+        if ($headerData['messageLength'] !== $responseLength) {
+            throw new Exception('Response length mismatch');
+        }
+
+        // Extract flag bits and payload type
+        $flagBits = \unpack('V', \substr($response, 16, 4))[1];
+        $payloadType = \ord(\substr($response, 20, 1));
+
+        // Extract BSON document (skip header + flagBits + payloadType)
+        $bsonString = \substr($response, 21, $responseLength - 21);
+
+        if (empty($bsonString)) {
+            return new \stdClass();
+        }
+
+        try {
+            // Parse BSON document
+            $result = Document::fromBSON($bsonString)->toPHP();
+
+            // Convert array to stdClass if needed
+            if (\is_array($result)) {
+                $result = (object)$result;
+            }
+
+            // Check for write errors (duplicate key, etc.)
+            if (\property_exists($result, 'writeErrors') && !empty($result->writeErrors)) {
+                throw new Exception(
+                    $result->writeErrors[0]->errmsg,
+                    $result->writeErrors[0]->code
+                );
+            }
+
+            // Check for general MongoDB errors
+            if (\property_exists($result, 'errmsg')) {
+                throw new Exception(
+                    'E' . $result->code . ' ' . $result->codeName . ': ' . $result->errmsg,
+                    $result->code
+                );
+            }
+
+            // Check for operation success
+            if (\property_exists($result, 'n') && $result->ok === 1.0) {
+                return $result->n;
+            }
+
+            if (\property_exists($result, 'nonce') && $result->ok === 1.0) {
+                return $result;
+            }
+
+            if ($result->ok === 1.0) {
+                return $result;
+            }
+
+            return $result->cursor->firstBatch;
+        } catch (InvalidArgumentException $e) {
+            throw new Exception('Failed to parse BSON response: ' . $e->getMessage());
+        } catch (\Exception $e) {
+            if ($e instanceof Exception) {
+                throw $e;
+            }
+            throw new Exception('Error parsing response: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Check if an exception represents a transient transaction error.
+     *
+     * @param Exception $exception Exception to check
+     * @return bool True if transient transaction error
+     */
+    public function isTransientTransactionError(Exception $exception): bool
+    {
+        $message = $exception->getMessage();
+        $code = $exception->getCode();
+
+        // MongoDB transient error codes
+        $transientCodes = [
+            self::TRANSACTION_TIMEOUT_ERROR,
+            self::TRANSACTION_ABORTED_ERROR,
+            6, // HostUnreachable
+            7, // HostNotFound
+            89, // NetworkTimeout
+            91, // ShutdownInProgress
+            189, // PrimarySteppedDown
+            262, // ExceededTimeLimit
+            9001, // SocketException
+            10107, // NotMaster
+            11600, // InterruptedAtShutdown
+            11602, // InterruptedDueToReplStateChange
+            13435, // NotMasterNoSlaveOk
+            13436, // NotMasterOrSecondary
+        ];
+
+        return \in_array($code, $transientCodes) ||
+            \str_contains($message, self::TRANSIENT_TRANSACTION_ERROR) ||
+            \str_contains($message, 'connection') ||
+            \str_contains($message, 'timeout') ||
+            \str_contains($message, 'network');
+    }
+
+    /**
+     * Check if an exception represents an unknown transaction commit result.
+     *
+     * @param Exception $exception Exception to check
+     * @return bool True if unknown commit result
+     */
+    public function isUnknownTransactionCommitResult(Exception $exception): bool
+    {
+        $message = $exception->getMessage();
+        $code = $exception->getCode();
+
+        $unknownCommitCodes = [
+            self::TRANSACTION_TIMEOUT_ERROR,
+            91, // ShutdownInProgress
+            189, // PrimarySteppedDown
+            262, // ExceededTimeLimit
+            9001, // SocketException
+            10107, // NotMaster
+            11600, // InterruptedAtShutdown
+            11602, // InterruptedDueToReplStateChange
+            13435, // NotMasterNoSlaveOk
+            13436, // NotMasterOrSecondary
+        ];
+
+        return \in_array($code, $unknownCommitCodes) ||
+            \str_contains($message, self::UNKNOWN_TRANSACTION_COMMIT_RESULT);
+    }
+
+    /**
+     * Execute a callback within a transaction with automatic retry logic.
+     *
+     * @param array $session Session from startSession()
+     * @param callable $callback Transaction callback that receives the session
+     * @param array $options Transaction options supporting:
+     *   - readConcern: Read concern specification
+     *   - writeConcern: Write concern specification
+     *   - readPreference: Read preference
+     *   - maxCommitTimeMS: Maximum time to allow for commit
+     *   - maxRetries: Maximum number of retries (default: 3)
+     *   - retryDelayMs: Delay between retries in milliseconds (default: 100)
+     * @return mixed Result from callback
+     * @throws Exception
+     */
+    public function withTransaction(array $session, callable $callback, array $options = [])
+    {
+        $maxRetries = $options['maxRetries'] ?? 3;
+        $retryDelayMs = $options['retryDelayMs'] ?? 100;
+        $attempt = 0;
+
+        while ($attempt <= $maxRetries) {
+            try {
+                // Start transaction
+                $this->startTransaction($session, $options);
+
+                try {
+                    // Execute user callback
+                    $result = $callback($session);
+
+                    // Attempt to commit
+                    $commitAttempt = 0;
+                    $maxCommitRetries = 3;
+
+                    while ($commitAttempt <= $maxCommitRetries) {
+                        try {
+                            $this->commitTransaction($session, $options);
+                            return $result;
+                        } catch (Exception $e) {
+                            if ($this->isUnknownTransactionCommitResult($e) && $commitAttempt < $maxCommitRetries) {
+                                $commitAttempt++;
+                                if ($retryDelayMs > 0) {
+                                    usleep($retryDelayMs * 1000);
+                                }
+                                continue;
+                            }
+                            throw $e;
+                        }
+                    }
+                } catch (Exception $e) {
+                    // Abort transaction on any error in callback or commit
+                    try {
+                        $this->abortTransaction($session);
+                    } catch (Exception $abortError) {
+                        // Log abort error but don't mask original error
+                        \error_log("Error aborting transaction: " . $abortError->getMessage());
+                    }
+                    throw $e;
+                }
+            } catch (Exception $e) {
+                if ($this->isTransientTransactionError($e) && $attempt < $maxRetries) {
+                    $attempt++;
+                    if ($retryDelayMs > 0) {
+                        \usleep($retryDelayMs * 1000);
+                    }
+                    continue;
+                }
+                throw $e;
+            }
+        }
+
+        throw new Exception('Transaction failed after maximum retries');
+    }
+
+    /**
+     * Update causal consistency timestamps from operation results.
+     *
+     * @param mixed $result Operation result
+     */
+    private function updateCausalConsistency($result): void
+    {
+        if (is_object($result)) {
+            if (property_exists($result, 'operationTime')) {
+                $this->operationTime = $result->operationTime;
+            }
+            if (property_exists($result, '$clusterTime')) {
+                $this->clusterTime = $result->{'$clusterTime'};
+            }
+        }
+    }
+
+    /**
+     * Get the current operation time for causal consistency.
+     *
+     * @return object|null Current operation time
+     */
+    public function getOperationTime(): ?object
+    {
+        return $this->operationTime;
+    }
+
+    /**
+     * Get the current cluster time for causal consistency.
+     *
+     * @return object|null Current cluster time
+     */
+    public function getClusterTime(): ?object
+    {
+        return $this->clusterTime;
+    }
+
+    /**
+     * Get session state information for debugging.
+     *
+     * @param array $session Session to inspect
+     * @return array Session state information
+     */
+    public function getSessionState(array $session): array
+    {
+        $rawId = $session['sessionId'] ?? ($session['id']->id ?? null);
+        $sessionId = $rawId instanceof \MongoDB\BSON\Binary
+            ? bin2hex($rawId->getData())
+            : $rawId;
+
+        if (!$sessionId || !isset($this->sessions[$sessionId])) {
+            return ['error' => 'Session not found'];
+        }
+
+        return [
+            'sessionId' => $sessionId,
+            'state' => $this->sessions[$sessionId]['state'],
+            'txnNumber' => $this->sessions[$sessionId]['txnNumber'],
+            'lastUse' => $this->sessions[$sessionId]['lastUse'],
+            'retryableWriteNumber' => $this->sessions[$sessionId]['retryableWriteNumber']
+        ];
+    }
+
+    /**
+     * Validate connection before operation with comprehensive checks.
+     *
+     * @throws Exception If connection is invalid
+     */
+    private function validateConnection(): void
+    {
+        if (!$this->isConnected) {
+            throw new Exception('Client is not connected to MongoDB');
+        }
+
+        if (!isset($this->client)) {
+            $this->isConnected = false;
+            throw new Exception('MongoDB client is not initialized');
+        }
+
+        if (!$this->client->isConnected()) {
+            $this->isConnected = false;
+            throw new Exception('Connection to MongoDB has been lost');
+        }
+    }
+
+    /**
+     * Create a write concern object with validation.
+     *
+     * @param array|string|int $writeConcern Write concern specification
+     * @return array Validated write concern
+     * @throws Exception If write concern is invalid
+     */
+    public function createWriteConcern($writeConcern): array
+    {
+        if (is_string($writeConcern)) {
+            return ['w' => $writeConcern];
+        }
+
+        if (is_int($writeConcern)) {
+            if ($writeConcern < 0) {
+                throw new Exception('Write concern w value must be >= 0');
+            }
+            return ['w' => $writeConcern];
+        }
+
+        if (is_array($writeConcern)) {
+            $concern = [];
+
+            if (isset($writeConcern['w'])) {
+                if (is_int($writeConcern['w']) && $writeConcern['w'] < 0) {
+                    throw new Exception('Write concern w value must be >= 0');
+                }
+                $concern['w'] = $writeConcern['w'];
+            }
+
+            if (isset($writeConcern['j'])) {
+                $concern['j'] = (bool)$writeConcern['j'];
+            }
+
+            if (isset($writeConcern['wtimeout'])) {
+                if (!is_int($writeConcern['wtimeout']) || $writeConcern['wtimeout'] < 0) {
+                    throw new Exception('Write concern wtimeout must be a non-negative integer');
+                }
+                $concern['wtimeout'] = $writeConcern['wtimeout'];
+            }
+
+            return $concern;
+        }
+
+        throw new Exception('Invalid write concern format');
+    }
+
+    /**
+     * Check if readConcern should be skipped for a transaction operation
+     *
+     * @param array $options The options array containing session
+     * @return bool True if readConcern should be skipped
+     */
+    private function shouldSkipReadConcern(array $options): bool
+    {
+        if (!isset($options['session'])) {
+            return false;
+        }
+
+        $sessionData = $options['session'];
+
+        // Use the same extraction logic as in query() method
+        $sessionId = null;
+        if (is_array($sessionData) && isset($sessionData['id'])) {
+            $rawId = $sessionData['id']->id ?? null;
+            $sessionId = $rawId instanceof \MongoDB\BSON\Binary
+                ? bin2hex($rawId->getData())
+                : $rawId;
+        } else {
+            $rawId = $sessionData->id ?? null;
+            $sessionId = $rawId instanceof \MongoDB\BSON\Binary
+                ? bin2hex($rawId->getData())
+                : $rawId;
+        }
+
+        // If in transaction and not first operation, skip readConcern
+        if ($sessionId && isset($this->sessions[$sessionId]) &&
+            $this->sessions[$sessionId]['state'] === self::TRANSACTION_IN_PROGRESS &&
+            isset($this->sessions[$sessionId]['firstOperationDone'])) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Create a read concern object with validation.
+     *
+     * @param array|string $readConcern Read concern specification
+     * @return array Validated read concern
+     * @throws Exception If read concern is invalid
+     */
+    public function createReadConcern($readConcern): array
+    {
+        if (is_string($readConcern)) {
+            $validLevels = [
+                self::READ_CONCERN_LOCAL,
+                self::READ_CONCERN_AVAILABLE,
+                self::READ_CONCERN_MAJORITY,
+                self::READ_CONCERN_LINEARIZABLE,
+                self::READ_CONCERN_SNAPSHOT
+            ];
+
+            if (!in_array($readConcern, $validLevels)) {
+                throw new Exception('Invalid read concern level: ' . $readConcern);
+            }
+
+            return ['level' => $readConcern];
+        }
+
+        if (is_array($readConcern)) {
+            $concern = [];
+
+            if (isset($readConcern['level'])) {
+                $validLevels = [
+                    self::READ_CONCERN_LOCAL,
+                    self::READ_CONCERN_AVAILABLE,
+                    self::READ_CONCERN_MAJORITY,
+                    self::READ_CONCERN_LINEARIZABLE,
+                    self::READ_CONCERN_SNAPSHOT
+                ];
+
+                if (!in_array($readConcern['level'], $validLevels)) {
+                    throw new Exception('Invalid read concern level: ' . $readConcern['level']);
+                }
+
+                $concern['level'] = $readConcern['level'];
+            }
+
+            if (isset($readConcern['afterClusterTime'])) {
+                $concern['afterClusterTime'] = $readConcern['afterClusterTime'];
+            }
+
+            return $concern;
+        }
+
+        throw new Exception('Invalid read concern format');
+    }
+
+    /**
+     * Get connection status information.
+     *
+     * @return array Connection status details
+     */
+    public function getConnectionInfo(): array
+    {
+        return [
+            'connected' => $this->isConnected,
+            'host' => $this->host,
+            'port' => $this->port,
+            'database' => $this->database,
+            'activeSessions' => count($this->sessions),
+            'clusterTimeSet' => $this->clusterTime !== null,
+            'operationTimeSet' => $this->operationTime !== null
+        ];
+    }
+
+    /**
+     * Clean up stale sessions (older than 30 minutes).
+     */
+    public function cleanupStaleSessions(): void
+    {
+        $cutoff = time() - 1800; // 30 minutes
+        $staleSessions = [];
+
+        foreach ($this->sessions as $sessionId => $sessionData) {
+            if ($sessionData['lastUse'] < $cutoff) {
+                $staleSessions[] = ['id' => $sessionData['id'], 'sessionId' => $sessionId];
+            }
+        }
+
+        if (!empty($staleSessions)) {
+            try {
+                $this->endSessions($staleSessions);
+            } catch (Exception $e) {
+                \error_log("Error cleaning up stale sessions: " . $e->getMessage());
+            }
+        }
+    }
+
+    /**
+     * Destructor to ensure proper cleanup.
+     */
+    public function __destruct()
+    {
+        $this->close();
     }
 }

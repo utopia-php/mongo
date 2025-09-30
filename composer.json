@@ -23,21 +23,21 @@
     },
     "scripts":{
         "test": "phpunit",
-        "analyse": "vendor/bin/phpstan analyse",
+        "check": "vendor/bin/phpstan analyse --memory-limit=1G --level=max src",
         "format": "vendor/bin/pint",
         "lint": "vendor/bin/pint --test"
     },
     "require": {
         "php": ">=8.0",
-        "ext-mongodb": "2.1.1",
-        "mongodb/mongodb": "2.1.0",
-        "ramsey/uuid": "^4.9.0"
+        "ext-mongodb": "2.1.*",
+        "mongodb/mongodb": "2.1.*",
+        "ramsey/uuid": "4.9.*"
     },
     "require-dev": {
-        "fakerphp/faker": "^1.14",
-        "phpunit/phpunit": "^9.4",
-        "swoole/ide-helper": "4.8.0",
-        "laravel/pint": "1.2.*",
-        "phpstan/phpstan": "2.1.*"
+        "fakerphp/faker": "1.*",
+        "phpunit/phpunit": "9.*",
+        "swoole/ide-helper": "5.1.*",
+        "laravel/pint": "*",
+        "phpstan/phpstan": "*"
     }
 }

@@ -191,9 +191,9 @@ class Exception extends \Exception
      *
      * @param \stdClass $errorResponse MongoDB error response
      * @param string|null $operationType Operation type
-     * @return static
+     * @return self
      */
-    public static function fromResponse(\stdClass $errorResponse, ?string $operationType = null): static
+    public static function fromResponse(\stdClass $errorResponse, ?string $operationType = null): self
     {
         $message = $errorResponse->errmsg ?? 'Unknown MongoDB error';
         $code = $errorResponse->code ?? 0;
@@ -201,7 +201,7 @@ class Exception extends \Exception
         $writeErrors = $errorResponse->writeErrors ?? null;
         $writeConcernErrors = $errorResponse->writeConcernErrors ?? null;
 
-        return new static(
+        return new self(
             $message,
             $code,
             null,

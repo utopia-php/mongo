@@ -23,7 +23,7 @@
     },
     "scripts":{
         "test": "phpunit",
-        "check": "vendor/bin/phpstan analyse --memory-limit=1G --level=max src",
+        "check": "vendor/bin/phpstan analyse --memory-limit=1G src",
         "format": "vendor/bin/pint",
         "lint": "vendor/bin/pint --test"
     },

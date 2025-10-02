@@ -655,7 +655,7 @@ class Client
             $docObj->{$key} = $value;
         }
 
-        if (!isset($docObj->_id) || $docObj->_id === '' || $docObj->_id === null) {
+        if (!isset($docObj->_id) || $docObj->_id === '') {
             $docObj->_id = $this->createUuid();
         }
 
@@ -729,7 +729,7 @@ class Client
                     $docObj->{$key} = $value;
                 }
 
-                if (!isset($docObj->_id) || $docObj->_id === '' || $docObj->_id === null) {
+                if (!isset($docObj->_id) || $docObj->_id === '') {
                     $docObj->_id = $this->createUuid();
                 }
 
@@ -806,10 +806,10 @@ class Client
      *   - arrayFilters: Array filters for updates
      * @param bool $multi Whether to update multiple documents
      *
-     * @return Client
+     * @return int Number of modified documents
      * @throws Exception
      */
-    public function update(string $collection, array $where = [], array $updates = [], array $options = [], bool $multi = false): self
+    public function update(string $collection, array $where = [], array $updates = [], array $options = [], bool $multi = false): int
     {
         // Build command with session and concerns
         $command = [
@@ -843,9 +843,7 @@ class Client
         $otherOptions = array_diff_key($options, array_flip(['session', 'writeConcern', 'readConcern', 'upsert']));
         $command = array_merge($command, $otherOptions);
 
-        $this->query($command);
-
-        return $this;
+        return $this->query($command);
     }
 
     /**
@@ -856,10 +854,10 @@ class Client
      * @param array $operations Array of operations, each with 'filter' and 'update' keys
      * @param array $options
      *
-     * @return self
+     * @return int Number of modified documents
      * @throws Exception
      */
-    public function upsert(string $collection, array $operations, array $options = []): self
+    public function upsert(string $collection, array $operations, array $options = []): int
     {
         $updates = [];
 
@@ -874,7 +872,7 @@ class Client
             $updates[] = $updateOperation;
         }
 
-        $this->query(
+        return $this->query(
             array_merge(
                 [
                     self::COMMAND_UPDATE => $collection,
@@ -883,7 +881,6 @@ class Client
                 $options
             )
         );
-        return $this;
     }
 
 
@@ -1542,9 +1539,7 @@ class Client
                     $activeSessions[] = ['id' => $sessionData['id'], 'sessionId' => $sessionId];
                 }
 
-                if (!empty($activeSessions)) {
-                    $this->endSessions($activeSessions);
-                }
+                $this->endSessions($activeSessions);
             } catch (Exception $e) {
                 // Silently ignore if connection is already lost during cleanup
                 if (!str_contains($e->getMessage(), 'Connection to MongoDB has been lost')) {
@@ -1553,7 +1548,7 @@ class Client
             }
         }
 
-        if (isset($this->client) && $this->client->isConnected()) {
+        if ($this->client->isConnected()) {
             $this->client->close();
         }
 
@@ -1871,11 +1866,6 @@ class Client
             throw new Exception('Client is not connected to MongoDB');
         }
 
-        if (!isset($this->client)) {
-            $this->isConnected = false;
-            throw new Exception('MongoDB client is not initialized');
-        }
-
         if (!$this->client->isConnected()) {
             $this->isConnected = false;
             throw new Exception('Connection to MongoDB has been lost');
@@ -1889,7 +1879,7 @@ class Client
      * @return array Validated write concern
      * @throws Exception If write concern is invalid
      */
-    public function createWriteConcern($writeConcern): array
+    public function createWriteConcern(array|string|int $writeConcern): array
     {
         if (is_string($writeConcern)) {
             return ['w' => $writeConcern];
@@ -1902,31 +1892,27 @@ class Client
             return ['w' => $writeConcern];
         }
 
-        if (is_array($writeConcern)) {
-            $concern = [];
+        $concern = [];
 
-            if (isset($writeConcern['w'])) {
-                if (is_int($writeConcern['w']) && $writeConcern['w'] < 0) {
-                    throw new Exception('Write concern w value must be >= 0');
-                }
-                $concern['w'] = $writeConcern['w'];
+        if (isset($writeConcern['w'])) {
+            if (is_int($writeConcern['w']) && $writeConcern['w'] < 0) {
+                throw new Exception('Write concern w value must be >= 0');
             }
-
-            if (isset($writeConcern['j'])) {
-                $concern['j'] = (bool)$writeConcern['j'];
-            }
-
-            if (isset($writeConcern['wtimeout'])) {
-                if (!is_int($writeConcern['wtimeout']) || $writeConcern['wtimeout'] < 0) {
-                    throw new Exception('Write concern wtimeout must be a non-negative integer');
-                }
-                $concern['wtimeout'] = $writeConcern['wtimeout'];
-            }
-
-            return $concern;
+            $concern['w'] = $writeConcern['w'];
         }
 
-        throw new Exception('Invalid write concern format');
+        if (isset($writeConcern['j'])) {
+            $concern['j'] = (bool)$writeConcern['j'];
+        }
+
+        if (isset($writeConcern['wtimeout'])) {
+            if (!is_int($writeConcern['wtimeout']) || $writeConcern['wtimeout'] < 0) {
+                throw new Exception('Write concern wtimeout must be a non-negative integer');
+            }
+            $concern['wtimeout'] = $writeConcern['wtimeout'];
+        }
+
+        return $concern;
     }
 
     /**
@@ -1974,7 +1960,7 @@ class Client
      * @return array Validated read concern
      * @throws Exception If read concern is invalid
      */
-    public function createReadConcern($readConcern): array
+    public function createReadConcern(array|string $readConcern): array
     {
         if (is_string($readConcern)) {
             $validLevels = [
@@ -1992,33 +1978,29 @@ class Client
             return ['level' => $readConcern];
         }
 
-        if (is_array($readConcern)) {
-            $concern = [];
+        $concern = [];
 
-            if (isset($readConcern['level'])) {
-                $validLevels = [
-                    self::READ_CONCERN_LOCAL,
-                    self::READ_CONCERN_AVAILABLE,
-                    self::READ_CONCERN_MAJORITY,
-                    self::READ_CONCERN_LINEARIZABLE,
-                    self::READ_CONCERN_SNAPSHOT
-                ];
+        if (isset($readConcern['level'])) {
+            $validLevels = [
+                self::READ_CONCERN_LOCAL,
+                self::READ_CONCERN_AVAILABLE,
+                self::READ_CONCERN_MAJORITY,
+                self::READ_CONCERN_LINEARIZABLE,
+                self::READ_CONCERN_SNAPSHOT
+            ];
 
-                if (!in_array($readConcern['level'], $validLevels)) {
-                    throw new Exception('Invalid read concern level: ' . $readConcern['level']);
-                }
-
-                $concern['level'] = $readConcern['level'];
+            if (!in_array($readConcern['level'], $validLevels)) {
+                throw new Exception('Invalid read concern level: ' . $readConcern['level']);
             }
 
-            if (isset($readConcern['afterClusterTime'])) {
-                $concern['afterClusterTime'] = $readConcern['afterClusterTime'];
-            }
-
-            return $concern;
+            $concern['level'] = $readConcern['level'];
         }
 
-        throw new Exception('Invalid read concern format');
+        if (isset($readConcern['afterClusterTime'])) {
+            $concern['afterClusterTime'] = $readConcern['afterClusterTime'];
+        }
+
+        return $concern;
     }
 
     /**

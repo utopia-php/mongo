@@ -806,10 +806,10 @@ class Client
      *   - arrayFilters: Array filters for updates
      * @param bool $multi Whether to update multiple documents
      *
-     * @return Client
+     * @return int Number of modified documents
      * @throws Exception
      */
-    public function update(string $collection, array $where = [], array $updates = [], array $options = [], bool $multi = false): self
+    public function update(string $collection, array $where = [], array $updates = [], array $options = [], bool $multi = false): int
     {
         // Build command with session and concerns
         $command = [
@@ -843,9 +843,7 @@ class Client
         $otherOptions = array_diff_key($options, array_flip(['session', 'writeConcern', 'readConcern', 'upsert']));
         $command = array_merge($command, $otherOptions);
 
-        $this->query($command);
-
-        return $this;
+        return $this->query($command);
     }
 
     /**
@@ -856,10 +854,10 @@ class Client
      * @param array $operations Array of operations, each with 'filter' and 'update' keys
      * @param array $options
      *
-     * @return self
+     * @return int Number of modified documents
      * @throws Exception
      */
-    public function upsert(string $collection, array $operations, array $options = []): self
+    public function upsert(string $collection, array $operations, array $options = []): int
     {
         $updates = [];
 
@@ -874,7 +872,7 @@ class Client
             $updates[] = $updateOperation;
         }
 
-        $this->query(
+        return $this->query(
             array_merge(
                 [
                     self::COMMAND_UPDATE => $collection,
@@ -883,7 +881,6 @@ class Client
                 $options
             )
         );
-        return $this;
     }
 
 

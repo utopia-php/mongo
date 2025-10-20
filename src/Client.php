@@ -98,9 +98,9 @@ class Client
     public const READ_PREFERENCE_NEAREST = 'nearest';
 
     /**
-     *  Commands that don't support  readConcern
+     *  Commands that do not support readConcern options
      */
-    private array $readConcernNotSupporteedCommands = [
+    private array $readConcernNotSupportedCommands = [
         self::COMMAND_GET_MORE,
         self::COMMAND_KILL_CURSORS
     ];
@@ -328,11 +328,14 @@ class Client
 
         // CRITICAL: Remove readConcern from any non-first operation in a transaction
         // MongoDB will reject commands with readConcern that have txnNumber but not startTransaction
-        // Or if the command is in the readConcernNotSupporteedCommands array
-        if (((isset($command['txnNumber']) &&  !isset($command['startTransaction']) &&  isset($command['readConcern']))
+        // Or if the command is in the readConcernNotSupportedCommands array
         if (
-            ((isset($command['txnNumber']) && !isset($command['startTransaction']) &&  isset($command['readConcern']))
-            || \in_array(array_key_first($command) ?? '', $this->readConcernNotSupporteedCommands))
+            (
+                isset($command['txnNumber'])
+                && !isset($command['startTransaction'])
+                && isset($command['readConcern'])
+            )
+            || \in_array(array_key_first($command) ?? '', $this->readConcernNotSupportedCommands)
         ) {
             unset($command['readConcern']);
         }

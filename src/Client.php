@@ -66,7 +66,7 @@ class Client
     public const COMMAND_END_SESSIONS = "endSessions";
     public const COMMAND_LIST_INDEXES = "listIndexes";
     public const COMMAND_COLLMOD = "collMod";
-
+    public const COMMAND_KILL_CURSORS = "killCursors";
     // Connection and performance settings
     private int $defaultMaxTimeMS = 30000; // 30 seconds default
 
@@ -96,6 +96,14 @@ class Client
     public const READ_PREFERENCE_PRIMARY_PREFERRED = 'primaryPreferred';
     public const READ_PREFERENCE_SECONDARY_PREFERRED = 'secondaryPreferred';
     public const READ_PREFERENCE_NEAREST = 'nearest';
+
+    /**
+     *  Commands that don't support  readConcern
+     */
+    private array $readConcernNotSupporteedCommands = [
+        self::COMMAND_GET_MORE, 
+        self::COMMAND_KILL_CURSORS
+    ];
 
 
     /**
@@ -320,7 +328,10 @@ class Client
 
         // CRITICAL: Remove readConcern from any non-first operation in a transaction
         // MongoDB will reject commands with readConcern that have txnNumber but not startTransaction
-        if (isset($command['txnNumber']) && !isset($command['startTransaction']) && isset($command['readConcern'])) {
+        // Or if the command is in the readConcernNotSupporteedCommands array
+        if (((isset($command['txnNumber']) &&  !isset($command['startTransaction']) &&  isset($command['readConcern']))
+             || 
+            in_array(array_keys($command)[0] ?? '', $this->readConcernNotSupporteedCommands))) {
             unset($command['readConcern']);
         }
 

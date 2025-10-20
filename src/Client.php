@@ -330,8 +330,10 @@ class Client
         // MongoDB will reject commands with readConcern that have txnNumber but not startTransaction
         // Or if the command is in the readConcernNotSupporteedCommands array
         if (((isset($command['txnNumber']) &&  !isset($command['startTransaction']) &&  isset($command['readConcern']))
-             ||
-            in_array(array_keys($command)[0] ?? '', $this->readConcernNotSupporteedCommands))) {
+        if (
+            ((isset($command['txnNumber']) && !isset($command['startTransaction']) &&  isset($command['readConcern']))
+            || \in_array(array_key_first($command) ?? '', $this->readConcernNotSupporteedCommands))
+        ) {
             unset($command['readConcern']);
         }
 

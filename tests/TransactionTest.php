@@ -162,7 +162,6 @@ class TransactionTest extends TestCase
             // Verify final state
             $finalState = $client->getSessionState($session);
             $this->assertEquals('committed', $finalState['state']);
-
         } finally {
             $client->endSessions([$session]);
         }
@@ -202,7 +201,6 @@ class TransactionTest extends TestCase
             // Verify document was not inserted (transaction rolled back)
             $found = $client->find('test_collection', ['name' => 'abort_test']);
             $this->assertEmpty($found->cursor->firstBatch);
-
         } finally {
             $client->endSessions([$session]);
         }
@@ -251,7 +249,6 @@ class TransactionTest extends TestCase
 
             $this->assertNotEmpty($found1->cursor->firstBatch);
             $this->assertNotEmpty($found2->cursor->firstBatch);
-
         } finally {
             $client->endSessions([$session]);
         }
@@ -343,7 +340,6 @@ class TransactionTest extends TestCase
             $this->assertEquals(1, $count);
 
             $client->commitTransaction($session);
-
         } finally {
             $client->endSessions([$session]);
         }

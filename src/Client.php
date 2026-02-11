@@ -1489,7 +1489,7 @@ class Client
         if (is_object($obj) || is_array($obj)) {
             $ret = (array)$obj;
             foreach ($ret as $key => $item) {
-                if ($item instanceof \stdClass || is_array($item)) {
+                if ($item instanceof stdClass || is_array($item)) {
                     $ret[$key] = $this->toArray($item);
                 }
             }

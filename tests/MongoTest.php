@@ -271,6 +271,124 @@ class MongoTest extends TestCase
         self::assertEquals('English', $documents[1]->language);
     }
 
+    public function testToArrayWithNestedDocumentFromMongo()
+    {
+        $client = $this->getDatabase();
+
+        // Insert a document with nested object data
+        $client->insert('movies_nested', [
+            '_id' => 'nested-test-1',
+            'title' => 'Inception',
+            'director' => [
+                'name' => 'Christopher Nolan',
+                'born' => 1970,
+            ],
+            'cast' => [
+                ['name' => 'Leonardo DiCaprio', 'role' => 'Cobb'],
+                ['name' => 'Tom Hardy', 'role' => 'Eames'],
+            ],
+        ]);
+
+        // Read back from MongoDB — cursor returns stdClass with nested stdClass
+        $result = $client->find('movies_nested', ['_id' => 'nested-test-1'])->cursor->firstBatch[0] ?? null;
+        self::assertNotNull($result);
+        self::assertInstanceOf(\stdClass::class, $result);
+        self::assertInstanceOf(\stdClass::class, $result->director);
+
+        // Convert via toArray — nested stdClass must become arrays
+        $array = $client->toArray($result);
+        self::assertIsArray($array);
+        self::assertIsArray($array['director']);
+        self::assertEquals('Christopher Nolan', $array['director']['name']);
+        self::assertEquals(1970, $array['director']['born']);
+        self::assertIsArray($array['cast']);
+        self::assertIsArray($array['cast'][0]);
+        self::assertEquals('Leonardo DiCaprio', $array['cast'][0]['name']);
+        self::assertIsArray($array['cast'][1]);
+        self::assertEquals('Tom Hardy', $array['cast'][1]['name']);
+
+        // Also test via lastDocument
+        $last = $client->lastDocument('movies_nested');
+        self::assertIsArray($last);
+        self::assertIsArray($last['director']);
+        self::assertEquals('Christopher Nolan', $last['director']['name']);
+
+        $client->dropCollection('movies_nested');
+    }
+
+    public function testToArrayNestedConversion()
+    {
+        $client = $this->getDatabase();
+
+        // Nested stdClass (simulates MongoDB BSON result)
+        $nested = new \stdClass();
+        $nested->name = 'John';
+        $nested->age = 30;
+
+        $root = new \stdClass();
+        $root->id = 'doc-1';
+        $root->author = $nested;
+        $root->tags = ['php', 'mongo'];
+
+        $result = $client->toArray($root);
+
+        self::assertIsArray($result);
+        self::assertEquals('doc-1', $result['id']);
+        self::assertIsArray($result['author']);
+        self::assertEquals('John', $result['author']['name']);
+        self::assertEquals(30, $result['author']['age']);
+        self::assertIsArray($result['tags']);
+
+        // Deeply nested stdClass
+        $deep = new \stdClass();
+        $deep->value = 'deep';
+
+        $mid = new \stdClass();
+        $mid->child = $deep;
+
+        $top = new \stdClass();
+        $top->mid = $mid;
+
+        $result = $client->toArray($top);
+
+        self::assertIsArray($result);
+        self::assertIsArray($result['mid']);
+        self::assertIsArray($result['mid']['child']);
+        self::assertEquals('deep', $result['mid']['child']['value']);
+
+        // Non-stdClass objects should NOT be converted
+        $root = new \stdClass();
+        $root->created = new \DateTime('2024-01-01');
+        $root->name = 'test';
+
+        $result = $client->toArray($root);
+
+        self::assertIsArray($result);
+        self::assertInstanceOf(\DateTime::class, $result['created']);
+
+        // stdClass inside an array (simulates nested documents in a list)
+        $item = new \stdClass();
+        $item->id = 'item-1';
+        $item->label = 'Tag';
+
+        $root = new \stdClass();
+        $root->id = 'doc-5';
+        $root->items = [$item];
+
+        $result = $client->toArray($root);
+
+        self::assertIsArray($result);
+        self::assertIsArray($result['items']);
+        self::assertIsArray($result['items'][0]);
+        self::assertEquals('item-1', $result['items'][0]['id']);
+
+        // Null handling
+        self::assertNull($client->toArray(null));
+
+        // Scalar wrapping
+        self::assertEquals([42], $client->toArray(42));
+    }
+
     public function testCountMethod()
     {
         $collectionName = 'count_test';

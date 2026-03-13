@@ -532,7 +532,7 @@ class Client
         $list = $this->listCollectionNames(["name" => $name], $options);
 
         if (\count($list->cursor->firstBatch) > 0) {
-            throw new Exception('Collection Exists');
+            throw new Exception('Collection Exists', 48);
         }
 
         $res = $this->query(array_merge([

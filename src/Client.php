@@ -407,7 +407,7 @@ class Client
         $sleepTime = 100;
 
         do {
-            $chunk = $this->client->recv();
+            $chunk = @$this->client->recv();
 
             if ($chunk === false || $chunk === '') {
                 $attempts++;

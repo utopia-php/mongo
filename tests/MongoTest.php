@@ -506,7 +506,7 @@ class MongoTest extends TestCase
                 $result = $e->getResult();
                 self::assertArrayHasKey('nInserted', $result);
                 self::assertArrayHasKey('writeErrors', $result);
-                self::assertGreaterThanOrEqual(1, $result['nInserted']);
+                self::assertSame(1, $result['nInserted']);
             }
 
             // 'new_id' should have been inserted despite the duplicate (ordered: false)

@@ -5,6 +5,7 @@ namespace Utopia\Tests;
 use MongoDB\BSON\ObjectId;
 use PHPUnit\Framework\TestCase;
 use Utopia\Mongo\Client;
+use Utopia\Mongo\BulkWriteException;
 use Utopia\Mongo\Exception;
 
 class MongoTest extends TestCase
@@ -473,6 +474,46 @@ class MongoTest extends TestCase
                 ['$count' => 'total']
             ]);
             self::assertEquals(6, $complexOrAggregationResult->cursor->firstBatch[0]->total);
+        } finally {
+            $this->getDatabase()->dropCollection($collectionName);
+        }
+    }
+
+    public function testInsertManyDuplicateThrowsBulkWriteException(): void
+    {
+        $collectionName = 'test_bulk_write_exception';
+        $this->getDatabase()->createCollection($collectionName);
+
+        try {
+            // Insert a doc with explicit _id
+            $this->getDatabase()->insert($collectionName, [
+                '_id' => 'dup_id',
+                'name' => 'Original',
+            ]);
+
+            // insertMany with a duplicate _id should throw BulkWriteException
+            try {
+                $this->getDatabase()->insertMany($collectionName, [
+                    ['_id' => 'dup_id', 'name' => 'Duplicate'],
+                    ['_id' => 'new_id', 'name' => 'New'],
+                ], ['ordered' => false]);
+
+                self::fail('Expected BulkWriteException');
+            } catch (BulkWriteException $e) {
+                // Should be a duplicate key error
+                self::assertSame(11000, $e->getCode());
+
+                $result = $e->getResult();
+                self::assertArrayHasKey('nInserted', $result);
+                self::assertArrayHasKey('writeErrors', $result);
+                self::assertSame(1, $result['nInserted']);
+            }
+
+            // 'new_id' should have been inserted despite the duplicate (ordered: false)
+            $found = $this->getDatabase()->find($collectionName, ['_id' => 'new_id']);
+            $docs = $found->cursor->firstBatch ?? [];
+            self::assertCount(1, $docs);
+            self::assertSame('New', $docs[0]->name);
         } finally {
             $this->getDatabase()->dropCollection($collectionName);
         }

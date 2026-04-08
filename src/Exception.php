@@ -243,7 +243,7 @@ class BulkWriteException extends Exception
 
     public function __construct(string $message, array $result, int $code = 0, ?\Throwable $previous = null)
     {
-        parent::__construct($message, $code, $previous);
+        parent::__construct($message, $code, $previous, [], $result['writeErrors'] ?? null);
         $this->result = $result;
     }
 

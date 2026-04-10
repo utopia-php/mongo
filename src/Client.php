@@ -44,6 +44,12 @@ class Client
     private bool $isConnected = false;
 
     /**
+     * When true, duplicate key writeErrors (11000/11001) are suppressed in receive().
+     * Set temporarily by insertMany() when ignoreDuplicates is enabled.
+     */
+    private bool $ignoreDuplicateErrors = false;
+
+    /**
      * Defines commands Mongo uses over wire protocol.
      */
 
@@ -717,8 +723,9 @@ class Client
      *   - readConcern: Read concern specification
      *   - readPreference: Read preference
      *   - maxTimeMS: Operation timeout in milliseconds
-     *   - ordered: Whether to stop on first error (default: true)
+     *   - ordered: Whether to stop on first error (default: true, forced to false when ignoreDuplicates is true)
      *   - batchSize: Number of documents per batch (default: 1000)
+     *   - ignoreDuplicates: When true, silently skip duplicate key errors (11000/11001) and return only successfully inserted documents
      * @return array Array of inserted documents with generated _ids
      * @throws Exception
      */
@@ -729,7 +736,8 @@ class Client
         }
 
         $batchSize = $options['batchSize'] ?? 1000;
-        $ordered = $options['ordered'] ?? true;
+        $ignoreDuplicates = $options['ignoreDuplicates'] ?? false;
+        $ordered = $ignoreDuplicates ? false : ($options['ordered'] ?? true);
         $insertedDocs = [];
 
         // Process documents in batches for better performance
@@ -775,12 +783,38 @@ class Client
             }
 
             // Add other options (excluding those we've already handled)
-            $otherOptions = array_diff_key($options, array_flip(['session', 'writeConcern', 'readConcern', 'batchSize']));
+            $otherOptions = array_diff_key($options, array_flip(['session', 'writeConcern', 'readConcern', 'batchSize', 'ignoreDuplicates']));
             $command = array_merge($command, $otherOptions);
 
-            $this->query($command);
+            if ($ignoreDuplicates) {
+                $this->ignoreDuplicateErrors = true;
+            }
 
-            $insertedDocs = array_merge($insertedDocs, $this->toArray($docObjs));
+            try {
+                $result = $this->query($command);
+            } finally {
+                $this->ignoreDuplicateErrors = false;
+            }
+
+            if ($ignoreDuplicates && \is_object($result) && \property_exists($result, 'writeErrors')) {
+                // Use writeError indices to identify which docs were skipped
+                $failedIndices = [];
+                foreach ($result->writeErrors as $err) {
+                    if (($err->code ?? 0) === 11000 || ($err->code ?? 0) === 11001) {
+                        $failedIndices[$err->index] = true;
+                    }
+                }
+
+                $filtered = [];
+                foreach ($docObjs as $i => $obj) {
+                    if (!isset($failedIndices[$i])) {
+                        $filtered[] = $obj;
+                    }
+                }
+                $insertedDocs = \array_merge($insertedDocs, $this->toArray($filtered));
+            } else {
+                $insertedDocs = \array_merge($insertedDocs, $this->toArray($docObjs));
+            }
         }
 
         return $insertedDocs;
@@ -1634,10 +1668,25 @@ class Client
 
             // Check for write errors (duplicate key, etc.)
             if (\property_exists($result, 'writeErrors') && !empty($result->writeErrors)) {
-                throw new Exception(
-                    $result->writeErrors[0]->errmsg,
-                    $result->writeErrors[0]->code
-                );
+                if ($this->ignoreDuplicateErrors) {
+                    $nonDuplicateErrors = \array_filter(
+                        (array)$result->writeErrors,
+                        fn ($err) => ($err->code ?? 0) !== 11000 && ($err->code ?? 0) !== 11001
+                    );
+
+                    if (!empty($nonDuplicateErrors)) {
+                        $first = \reset($nonDuplicateErrors);
+                        throw new Exception($first->errmsg, $first->code);
+                    }
+
+                    // Return the full result so insertMany() can read writeErrors indices
+                    return $result;
+                } else {
+                    throw new Exception(
+                        $result->writeErrors[0]->errmsg,
+                        $result->writeErrors[0]->code
+                    );
+                }
             }
 
             // Check for general MongoDB errors

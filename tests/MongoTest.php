@@ -389,6 +389,101 @@ class MongoTest extends TestCase
         self::assertEquals([42], $client->toArray(42));
     }
 
+    public function testInsertManyIgnoreDuplicates()
+    {
+        $collectionName = 'ignore_duplicates';
+        $this->getDatabase()->createCollection($collectionName);
+        try {
+            // Seed two documents
+            $this->getDatabase()->insertMany($collectionName, [
+                ['_id' => 'doc1', 'name' => 'Original A'],
+                ['_id' => 'doc2', 'name' => 'Original B'],
+            ]);
+
+            // Without ignoreDuplicates, inserting a duplicate throws
+            try {
+                $this->getDatabase()->insertMany($collectionName, [
+                    ['_id' => 'doc1', 'name' => 'Duplicate A'],
+                ]);
+                self::fail('Expected duplicate key exception');
+            } catch (Exception $e) {
+                self::assertTrue($e->isDuplicateKeyError());
+            }
+
+            // With ignoreDuplicates, duplicate is skipped and new doc is inserted
+            $result = $this->getDatabase()->insertMany($collectionName, [
+                ['_id' => 'doc1', 'name' => 'Duplicate A'],
+                ['_id' => 'doc3', 'name' => 'New C'],
+            ], ['ignoreDuplicates' => true]);
+
+            self::assertCount(1, $result);
+            self::assertEquals('doc3', $result[0]['_id']);
+
+            // Original doc1 unchanged
+            $docs = $this->getDatabase()->find($collectionName, ['_id' => 'doc1'])->cursor->firstBatch ?? [];
+            self::assertCount(1, $docs);
+            self::assertEquals('Original A', $docs[0]->name);
+
+            // Total should be 3
+            $total = $this->getDatabase()->count($collectionName);
+            self::assertEquals(3, $total);
+        } finally {
+            $this->getDatabase()->dropCollection($collectionName);
+        }
+    }
+
+    public function testInsertManyIgnoreIntraBatchDuplicates()
+    {
+        $collectionName = 'ignore_intra_batch';
+        $this->getDatabase()->createCollection($collectionName);
+        try {
+            // Same ID twice in one batch — first wins
+            $result = $this->getDatabase()->insertMany($collectionName, [
+                ['_id' => 'dup', 'name' => 'First'],
+                ['_id' => 'dup', 'name' => 'Second'],
+                ['_id' => 'unique1', 'name' => 'Unique'],
+            ], ['ignoreDuplicates' => true]);
+
+            self::assertCount(2, $result);
+
+            $doc = $this->getDatabase()->find($collectionName, ['_id' => 'dup'])->cursor->firstBatch ?? [];
+            self::assertCount(1, $doc);
+            self::assertEquals('First', $doc[0]->name);
+
+            $total = $this->getDatabase()->count($collectionName);
+            self::assertEquals(2, $total);
+        } finally {
+            $this->getDatabase()->dropCollection($collectionName);
+        }
+    }
+
+    public function testInsertManyIgnoreAllDuplicates()
+    {
+        $collectionName = 'ignore_all_dups';
+        $this->getDatabase()->createCollection($collectionName);
+        try {
+            // Seed one document
+            $this->getDatabase()->insert($collectionName, ['_id' => 'existing', 'name' => 'Original']);
+
+            // Insert only duplicates with ignoreDuplicates
+            $result = $this->getDatabase()->insertMany($collectionName, [
+                ['_id' => 'existing', 'name' => 'Duplicate'],
+            ], ['ignoreDuplicates' => true]);
+
+            self::assertCount(0, $result);
+
+            // Original unchanged
+            $docs = $this->getDatabase()->find($collectionName, ['_id' => 'existing'])->cursor->firstBatch ?? [];
+            self::assertEquals('Original', $docs[0]->name);
+
+            // Still only 1 document
+            $total = $this->getDatabase()->count($collectionName);
+            self::assertEquals(1, $total);
+        } finally {
+            $this->getDatabase()->dropCollection($collectionName);
+        }
+    }
+
     public function testCountMethod()
     {
         $collectionName = 'count_test';

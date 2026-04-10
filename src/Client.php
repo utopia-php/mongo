@@ -44,12 +44,6 @@ class Client
     private bool $isConnected = false;
 
     /**
-     * When true, duplicate key writeErrors (11000/11001) are suppressed in receive().
-     * Set temporarily by insertMany() when ignoreDuplicates is enabled.
-     */
-    private bool $ignoreDuplicateErrors = false;
-
-    /**
      * Defines commands Mongo uses over wire protocol.
      */
 
@@ -252,7 +246,7 @@ class Client
      * @return stdClass|array|int Query result
      * @throws Exception
      */
-    public function query(array $command, ?string $db = null): stdClass|array|int
+    public function query(array $command, ?string $db = null, bool $ignoreDuplicateErrors = false): stdClass|array|int
     {
         // Validate connection state before each operation
         $this->validateConnection();
@@ -357,7 +351,7 @@ class Client
 
         $sections = Document::fromPHP($params);
         $message = pack('V*', 21 + strlen($sections), $this->id, 0, 2013, 0) . "\0" . $sections;
-        $result = $this->send($message);
+        $result = $this->send($message, $ignoreDuplicateErrors);
 
         $this->updateCausalConsistency($result);
 
@@ -377,7 +371,7 @@ class Client
      * @return stdClass|array|int
      * @throws Exception
      */
-    public function send(mixed $data): stdClass|array|int
+    public function send(mixed $data, bool $ignoreDuplicateErrors = false): stdClass|array|int
     {
         // Check if connection is alive, connect if not
         if (!$this->client->isConnected()) {
@@ -396,14 +390,14 @@ class Client
             }
         }
 
-        return $this->receive();
+        return $this->receive($ignoreDuplicateErrors);
     }
 
     /**
      * Receive a message from connection.
      * @throws Exception
      */
-    private function receive(): stdClass|array|int
+    private function receive(bool $ignoreDuplicateErrors = false): stdClass|array|int
     {
         $chunks = [];
         $receivedLength = 0;
@@ -467,7 +461,7 @@ class Client
 
         $res = \implode('', $chunks);
 
-        return $this->parseResponse($res, $responseLength);
+        return $this->parseResponse($res, $responseLength, $ignoreDuplicateErrors);
     }
 
     /**
@@ -783,18 +777,10 @@ class Client
             }
 
             // Add other options (excluding those we've already handled)
-            $otherOptions = array_diff_key($options, array_flip(['session', 'writeConcern', 'readConcern', 'batchSize', 'ignoreDuplicates']));
+            $otherOptions = array_diff_key($options, array_flip(['session', 'writeConcern', 'readConcern', 'batchSize', 'ignoreDuplicates', 'ordered']));
             $command = array_merge($command, $otherOptions);
 
-            if ($ignoreDuplicates) {
-                $this->ignoreDuplicateErrors = true;
-            }
-
-            try {
-                $result = $this->query($command);
-            } finally {
-                $this->ignoreDuplicateErrors = false;
-            }
+            $result = $this->query($command, null, $ignoreDuplicates);
 
             if ($ignoreDuplicates && \is_object($result) && \property_exists($result, 'writeErrors')) {
                 // Use writeError indices to identify which docs were skipped
@@ -1618,7 +1604,7 @@ class Client
      * @return stdClass|array|int Parsed response
      * @throws Exception
      */
-    private function parseResponse(string $response, int $responseLength): stdClass|array|int
+    private function parseResponse(string $response, int $responseLength, bool $ignoreDuplicateErrors = false): stdClass|array|int
     {
         /*
          * The first 21 bytes of the MongoDB wire protocol response consist of:
@@ -1668,7 +1654,7 @@ class Client
 
             // Check for write errors (duplicate key, etc.)
             if (\property_exists($result, 'writeErrors') && !empty($result->writeErrors)) {
-                if ($this->ignoreDuplicateErrors) {
+                if ($ignoreDuplicateErrors) {
                     $nonDuplicateErrors = \array_filter(
                         (array)$result->writeErrors,
                         fn ($err) => ($err->code ?? 0) !== 11000 && ($err->code ?? 0) !== 11001

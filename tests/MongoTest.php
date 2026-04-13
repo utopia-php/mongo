@@ -337,9 +337,58 @@ class MongoTest extends TestCase
             $ids = \array_column($result['upserted'], '_id');
             \sort($ids);
             self::assertSame(['a', 'b', 'c'], $ids);
+
+            $indexes = \array_column($result['upserted'], 'index');
+            \sort($indexes);
+            self::assertSame([0, 1, 2], $indexes);
         } finally {
             $this->getDatabase()->dropCollection($collection);
         }
+    }
+
+    public function testUpsertWithCountsModifiesExisting()
+    {
+        $collection = 'upsert_counts_modify';
+        $this->getDatabase()->createCollection($collection);
+        try {
+            $this->getDatabase()->insert($collection, [
+                '_id' => 'exists',
+                'name' => 'Old',
+                'counter' => 1,
+            ]);
+
+            // Use $set (not $setOnInsert) so the matched doc is actually modified.
+            $result = $this->getDatabase()->upsertWithCounts($collection, [
+                [
+                    'filter' => ['_id' => 'exists'],
+                    'update' => [
+                        '$set' => ['name' => 'New'],
+                        '$inc' => ['counter' => 1],
+                    ],
+                ],
+            ]);
+
+            self::assertSame(1, $result['matched']);
+            self::assertSame(1, $result['modified'], 'modified should reflect nModified from MongoDB');
+            self::assertSame([], $result['upserted']);
+
+            // Verify the doc was actually updated on the server.
+            $docs = $this->getDatabase()->find($collection, ['_id' => 'exists'])->cursor->firstBatch ?? [];
+            self::assertCount(1, $docs);
+            self::assertEquals('New', $docs[0]->name);
+            self::assertEquals(2, $docs[0]->counter);
+        } finally {
+            $this->getDatabase()->dropCollection($collection);
+        }
+    }
+
+    public function testUpsertWithCountsEmpty()
+    {
+        // Should short-circuit without hitting the wire — MongoDB rejects an
+        // update command with an empty `updates` array.
+        $result = $this->getDatabase()->upsertWithCounts('does_not_matter', []);
+
+        self::assertSame(['matched' => 0, 'modified' => 0, 'upserted' => []], $result);
     }
 
     public function testUpsertWithCountsAllExisting()

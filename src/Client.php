@@ -929,6 +929,16 @@ class Client
      */
     public function upsertWithCounts(string $collection, array $operations, array $options = []): array
     {
+        // MongoDB rejects an `update` command with an empty `updates` array, so
+        // short-circuit dynamically-built batches before they hit the wire.
+        if (empty($operations)) {
+            return [
+                'matched' => 0,
+                'modified' => 0,
+                'upserted' => [],
+            ];
+        }
+
         $updates = [];
 
         foreach ($operations as $op) {

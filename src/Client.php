@@ -911,6 +911,12 @@ class Client
      * caller can tell exactly which operations produced new docs. Useful for
      * `skipDuplicates`-style callers that need to report "actually inserted" counts.
      *
+     * Counts are only meaningful for acknowledged writes. In practice mongod
+     * still returns `n` for `writeConcern: { w: 0 }` over OP_MSG, so this method
+     * normally works regardless — but if a future protocol change ever causes
+     * `n` to be omitted, the method raises an Exception rather than silently
+     * returning zeros for writes that may have applied.
+     *
      * @param string $collection
      * @param array<int, array{filter: array<string, mixed>, update: array<string, mixed>, multi?: bool}> $operations
      * @param array<string, mixed> $options
@@ -925,7 +931,8 @@ class Client
      *   is the list of newly-created docs, each carrying the source operation's
      *   `index` and the assigned `_id`.
      *
-     * @throws Exception
+     * @throws Exception When the response is missing the `n` field — typically
+     *                   the result of an unacknowledged write concern.
      */
     public function upsertWithCounts(string $collection, array $operations, array $options = []): array
     {
@@ -966,6 +973,19 @@ class Client
             throw new Exception('Unexpected upsertWithCounts response: expected stdClass, got ' . \gettype($result));
         }
 
+        // Defense-in-depth: the counts in this method are only meaningful for
+        // acknowledged writes. In practice mongod always replies with `n` over
+        // OP_MSG (even for writeConcern: { w: 0 }) because send() does not set
+        // the moreToCome flag, so this check is rarely tripped today — but if
+        // a future protocol change ever causes `n` to go missing, refuse loudly
+        // instead of silently returning zeros for writes that may have applied.
+        if (!\property_exists($result, 'n')) {
+            throw new Exception(
+                'upsertWithCounts() requires acknowledged writes — the response did not include `n`. '
+                . 'Do not pass writeConcern: { w: 0 } when calling this method.'
+            );
+        }
+
         $upserted = [];
         if (\property_exists($result, 'upserted') && \is_iterable($result->upserted)) {
             foreach ($result->upserted as $entry) {
@@ -978,8 +998,7 @@ class Client
 
         // MongoDB's `n` in the update response = matched-existing + upserted-new.
         // Subtract the upserts so `matched` reflects only pre-existing docs.
-        $n = (int) ($result->n ?? 0);
-        $matched = \max(0, $n - \count($upserted));
+        $matched = \max(0, (int) $result->n - \count($upserted));
 
         return [
             'matched' => $matched,

@@ -384,12 +384,45 @@ class MongoTest extends TestCase
 
     public function testUpsertWithCountsEmpty()
     {
-        // Should short-circuit without hitting the wire — MongoDB rejects an
-        // update command with an empty `updates` array.
-        $result = $this->getDatabase()->upsertWithCounts('does_not_matter', []);
+        // The guard should short-circuit before any wire traffic. Indirect proof:
+        // if the guard regressed, this would build an `update` command with an
+        // empty `updates` array, which MongoDB rejects with
+        //   "Failed to parse: updates: array is empty"
+        // — that error would propagate as an Exception and fail this assertion.
+        // We also use a non-existent collection name to ensure the guard runs
+        // before any collection lookup happens.
+        $result = $this->getDatabase()->upsertWithCounts('this_collection_does_not_exist', []);
 
         self::assertSame(['matched' => 0, 'modified' => 0, 'upserted' => []], $result);
     }
+
+    public function testUpsertWithCountsRejectsEmptyUpdatesAtServer()
+    {
+        // Documents the underlying MongoDB behavior the empty-batch guard
+        // relies on. If a future MongoDB version stops rejecting empty
+        // `updates` arrays, the empty-batch test above becomes a weaker check
+        // and we should add a stronger guarantee.
+        $collection = 'upsert_counts_empty_proof';
+        $this->getDatabase()->createCollection($collection);
+        try {
+            $this->expectException(Exception::class);
+
+            // Bypass upsertWithCounts() entirely and send an `update` command
+            // with an empty `updates` array directly through query().
+            $this->getDatabase()->query([
+                'update' => $collection,
+                'updates' => [],
+            ]);
+        } finally {
+            $this->getDatabase()->dropCollection($collection);
+        }
+    }
+
+    // Note: there is no test for the "missing `n` in response" defensive check.
+    // Triggering it would require either a moreToCome OP_MSG flag (not used by
+    // this client) or a stubbed transport — mongod still replies with `n` for
+    // writeConcern: { w: 0 } in normal use, so the check is defense-in-depth
+    // against future protocol changes rather than something callers can hit.
 
     public function testUpsertWithCountsAllExisting()
     {

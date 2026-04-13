@@ -243,10 +243,14 @@ class Client
      *
      * @param array<string, mixed> $command Command to execute
      * @param string|null $db Database name
+     * @param bool $returnRaw When true, skip the int/extracted-field short-circuits
+     *                        in the response parser and return the full stdClass
+     *                        result — use when the caller needs fields beyond `n`
+     *                        (e.g. the `upserted` array from an update command).
      * @return stdClass|array|int Query result
      * @throws Exception
      */
-    public function query(array $command, ?string $db = null): stdClass|array|int
+    public function query(array $command, ?string $db = null, bool $returnRaw = false): stdClass|array|int
     {
         // Validate connection state before each operation
         $this->validateConnection();
@@ -351,7 +355,7 @@ class Client
 
         $sections = Document::fromPHP($params);
         $message = pack('V*', 21 + strlen($sections), $this->id, 0, 2013, 0) . "\0" . $sections;
-        $result = $this->send($message);
+        $result = $this->send($message, $returnRaw);
 
         $this->updateCausalConsistency($result);
 
@@ -371,7 +375,7 @@ class Client
      * @return stdClass|array|int
      * @throws Exception
      */
-    public function send(mixed $data): stdClass|array|int
+    public function send(mixed $data, bool $returnRaw = false): stdClass|array|int
     {
         // Check if connection is alive, connect if not
         if (!$this->client->isConnected()) {
@@ -390,14 +394,14 @@ class Client
             }
         }
 
-        return $this->receive();
+        return $this->receive($returnRaw);
     }
 
     /**
      * Receive a message from connection.
      * @throws Exception
      */
-    private function receive(): stdClass|array|int
+    private function receive(bool $returnRaw = false): stdClass|array|int
     {
         $chunks = [];
         $receivedLength = 0;
@@ -461,7 +465,7 @@ class Client
 
         $res = \implode('', $chunks);
 
-        return $this->parseResponse($res, $responseLength);
+        return $this->parseResponse($res, $responseLength, $returnRaw);
     }
 
     /**
@@ -897,6 +901,81 @@ class Client
                 $options
             )
         );
+    }
+
+    /**
+     * Execute a batch of upserts and return detailed counts from the response.
+     *
+     * Unlike {@see upsert()}, which returns the raw `n` field (matched + upserted),
+     * this method separates matched-existing from newly-upserted documents so the
+     * caller can tell exactly which operations produced new docs. Useful for
+     * `skipDuplicates`-style callers that need to report "actually inserted" counts.
+     *
+     * @param string $collection
+     * @param array<int, array{filter: array<string, mixed>, update: array<string, mixed>, multi?: bool}> $operations
+     * @param array<string, mixed> $options
+     *
+     * @return array{
+     *     matched: int,
+     *     modified: int,
+     *     upserted: array<int, array{index: int, _id: mixed}>
+     * } Response counts. `matched` is the number of pre-existing docs matched
+     *   by a filter (derived as `n - count(upserted)` since MongoDB's `n`
+     *   includes upserts). `modified` is docs whose contents changed. `upserted`
+     *   is the list of newly-created docs, each carrying the source operation's
+     *   `index` and the assigned `_id`.
+     *
+     * @throws Exception
+     */
+    public function upsertWithCounts(string $collection, array $operations, array $options = []): array
+    {
+        $updates = [];
+
+        foreach ($operations as $op) {
+            $updates[] = [
+                'q' => $op['filter'],
+                'u' => $this->toObject($op['update']),
+                'upsert' => true,
+                'multi' => $op['multi'] ?? false,
+            ];
+        }
+
+        $result = $this->query(
+            array_merge(
+                [
+                    self::COMMAND_UPDATE => $collection,
+                    'updates' => $updates,
+                ],
+                $options
+            ),
+            null,
+            true // $returnRaw — we need the full response, not just $result->n
+        );
+
+        if (!$result instanceof stdClass) {
+            throw new Exception('Unexpected upsertWithCounts response: expected stdClass, got ' . \gettype($result));
+        }
+
+        $upserted = [];
+        if (\property_exists($result, 'upserted') && \is_iterable($result->upserted)) {
+            foreach ($result->upserted as $entry) {
+                $upserted[] = [
+                    'index' => (int) $entry->index,
+                    '_id' => $entry->_id,
+                ];
+            }
+        }
+
+        // MongoDB's `n` in the update response = matched-existing + upserted-new.
+        // Subtract the upserts so `matched` reflects only pre-existing docs.
+        $n = (int) ($result->n ?? 0);
+        $matched = \max(0, $n - \count($upserted));
+
+        return [
+            'matched' => $matched,
+            'modified' => (int) ($result->nModified ?? 0),
+            'upserted' => $upserted,
+        ];
     }
 
 
@@ -1584,7 +1663,7 @@ class Client
      * @return stdClass|array|int Parsed response
      * @throws Exception
      */
-    private function parseResponse(string $response, int $responseLength): stdClass|array|int
+    private function parseResponse(string $response, int $responseLength, bool $returnRaw = false): stdClass|array|int
     {
         /*
          * The first 21 bytes of the MongoDB wire protocol response consist of:
@@ -1646,6 +1725,12 @@ class Client
                     'E' . $result->code . ' ' . $result->codeName . ': ' . $result->errmsg,
                     $result->code
                 );
+            }
+
+            // Callers that need the full response object (e.g. to read the
+            // `upserted` array from an update command) opt in with $returnRaw.
+            if ($returnRaw && $result->ok === 1.0) {
+                return $result;
             }
 
             // Check for operation success

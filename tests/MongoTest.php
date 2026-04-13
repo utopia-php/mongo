@@ -271,6 +271,107 @@ class MongoTest extends TestCase
         self::assertEquals('English', $documents[1]->language);
     }
 
+    public function testUpsertWithCountsMixed()
+    {
+        $collection = 'upsert_counts_mixed';
+        $this->getDatabase()->createCollection($collection);
+        try {
+            // Seed one document — it will be matched (no-op) by the first op.
+            $this->getDatabase()->insert($collection, [
+                '_id' => 'existing',
+                'name' => 'Original',
+            ]);
+
+            $result = $this->getDatabase()->upsertWithCounts($collection, [
+                [
+                    'filter' => ['_id' => 'existing'],
+                    // $setOnInsert is a no-op for existing docs — leaves 'Original' intact.
+                    'update' => ['$setOnInsert' => ['name' => 'ShouldNotWrite']],
+                ],
+                [
+                    'filter' => ['_id' => 'fresh'],
+                    'update' => ['$setOnInsert' => ['name' => 'Fresh']],
+                ],
+            ]);
+
+            // One pre-existing match + one upsert = n:2, matched (derived):1, upserted:1.
+            self::assertIsArray($result);
+            self::assertArrayHasKey('matched', $result);
+            self::assertArrayHasKey('modified', $result);
+            self::assertArrayHasKey('upserted', $result);
+
+            self::assertSame(1, $result['matched'], 'matched should exclude upserts');
+            self::assertSame(0, $result['modified']);
+            self::assertCount(1, $result['upserted']);
+            self::assertSame(1, $result['upserted'][0]['index']);
+            self::assertSame('fresh', $result['upserted'][0]['_id']);
+
+            // Existing doc untouched, fresh doc created.
+            $existing = $this->getDatabase()->find($collection, ['_id' => 'existing'])->cursor->firstBatch ?? [];
+            self::assertCount(1, $existing);
+            self::assertEquals('Original', $existing[0]->name);
+
+            $fresh = $this->getDatabase()->find($collection, ['_id' => 'fresh'])->cursor->firstBatch ?? [];
+            self::assertCount(1, $fresh);
+            self::assertEquals('Fresh', $fresh[0]->name);
+        } finally {
+            $this->getDatabase()->dropCollection($collection);
+        }
+    }
+
+    public function testUpsertWithCountsAllNew()
+    {
+        $collection = 'upsert_counts_new';
+        $this->getDatabase()->createCollection($collection);
+        try {
+            $result = $this->getDatabase()->upsertWithCounts($collection, [
+                ['filter' => ['_id' => 'a'], 'update' => ['$setOnInsert' => ['name' => 'A']]],
+                ['filter' => ['_id' => 'b'], 'update' => ['$setOnInsert' => ['name' => 'B']]],
+                ['filter' => ['_id' => 'c'], 'update' => ['$setOnInsert' => ['name' => 'C']]],
+            ]);
+
+            self::assertSame(0, $result['matched'], 'No docs matched — all were upserts');
+            self::assertSame(0, $result['modified']);
+            self::assertCount(3, $result['upserted']);
+
+            $ids = \array_column($result['upserted'], '_id');
+            \sort($ids);
+            self::assertSame(['a', 'b', 'c'], $ids);
+        } finally {
+            $this->getDatabase()->dropCollection($collection);
+        }
+    }
+
+    public function testUpsertWithCountsAllExisting()
+    {
+        $collection = 'upsert_counts_existing';
+        $this->getDatabase()->createCollection($collection);
+        try {
+            $this->getDatabase()->insertMany($collection, [
+                ['_id' => 'a', 'name' => 'A'],
+                ['_id' => 'b', 'name' => 'B'],
+            ]);
+
+            $result = $this->getDatabase()->upsertWithCounts($collection, [
+                ['filter' => ['_id' => 'a'], 'update' => ['$setOnInsert' => ['name' => 'NopeA']]],
+                ['filter' => ['_id' => 'b'], 'update' => ['$setOnInsert' => ['name' => 'NopeB']]],
+            ]);
+
+            self::assertSame(2, $result['matched']);
+            self::assertSame(0, $result['modified']);
+            self::assertSame([], $result['upserted']);
+
+            // Existing values preserved.
+            $docs = $this->getDatabase()->find($collection)->cursor->firstBatch ?? [];
+            self::assertCount(2, $docs);
+            foreach ($docs as $doc) {
+                self::assertContains($doc->name, ['A', 'B']);
+            }
+        } finally {
+            $this->getDatabase()->dropCollection($collection);
+        }
+    }
+
     public function testToArrayWithNestedDocumentFromMongo()
     {
         $client = $this->getDatabase();

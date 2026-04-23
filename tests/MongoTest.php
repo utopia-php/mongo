@@ -43,7 +43,7 @@ class MongoTest extends TestCase
 
     public function testGetHost()
     {
-        self::assertSame('mongo', $this->getDatabase()->getClusterTime());
+        self::assertSame('mongo', $this->getDatabase()->getHost());
     }
 
     /**

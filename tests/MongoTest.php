@@ -41,6 +41,10 @@ class MongoTest extends TestCase
         self::assertTrue($this->getDatabase()->dropDatabase());
     }
 
+    public function testGetHost()
+    {
+        self::assertSame('mongo', $this->getDatabase()->getHost());
+    }
 
     /**
      * @throws Exception

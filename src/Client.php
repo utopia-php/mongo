@@ -229,6 +229,16 @@ class Client
     }
 
     /**
+     * Return client's host
+     *
+     * @return string
+     */
+    public function getHost(): string
+    {
+        return $this->host;
+    }
+
+    /**
      * Create a UUID using UUID7 standard for MongoDB _id field.
      *
      * @return string

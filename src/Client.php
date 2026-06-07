@@ -143,7 +143,8 @@ class Client
         string $user,
         string $password,
         bool $useCoroutine = false,
-        bool $tls = false
+        bool $tls = false,
+        array $tlsOptions = []
     ) {
         if (empty($database)) {
             throw new \InvalidArgumentException('Database name cannot be empty');
@@ -197,11 +198,12 @@ class Client
         ];
 
         if ($tls) {
-            // The backend is reached through a TLS-terminating proxy presenting a
-            // trusted platform certificate; encrypt the hop without enforcing peer
-            // verification (the proxy hostname is not on the backend's own cert).
-            $options['ssl_verify_peer'] = false;
-            $options['ssl_allow_self_signed'] = true;
+            // TLS is the mechanism; the caller owns the verification policy. Pass
+            // ssl_verify_peer / ssl_cafile / ssl_host_name (etc.) via $tlsOptions —
+            // e.g. verify against the system CA in production, or relax verification
+            // where the endpoint presents an untrusted certificate. Defaults to
+            // Swoole's behaviour when no options are given.
+            $options = array_merge($options, $tlsOptions);
         }
 
         $this->client->set($options);

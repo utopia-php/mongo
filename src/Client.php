@@ -142,7 +142,8 @@ class Client
         int $port,
         string $user,
         string $password,
-        bool $useCoroutine = false
+        bool $useCoroutine = false,
+        bool $tls = false
     ) {
         if (empty($database)) {
             throw new \InvalidArgumentException('Database name cannot be empty');
@@ -177,18 +178,33 @@ class Client
             }
         }
 
+        $flags = SWOOLE_SOCK_TCP | SWOOLE_KEEP;
+        if ($tls) {
+            $flags |= SWOOLE_SSL;
+        }
+
         $this->client = $useCoroutine
-            ? new CoroutineClient(SWOOLE_SOCK_TCP | SWOOLE_KEEP)
-            : new SwooleClient(SWOOLE_SOCK_TCP | SWOOLE_KEEP);
+            ? new CoroutineClient($flags)
+            : new SwooleClient($flags);
 
         // Set socket options to prevent hanging
-        $this->client->set([
+        $options = [
             'open_tcp_keepalive' => true,
             'tcp_keepidle' => 4,     // Start keepalive after 4s idle
             'tcp_keepinterval' => 3, // Keepalive interval 3s
             'tcp_keepcount' => 2,    // Close after 2 failed keepalives
             'timeout' => 30          // 30 second connection timeout
-        ]);
+        ];
+
+        if ($tls) {
+            // The backend is reached through a TLS-terminating proxy presenting a
+            // trusted platform certificate; encrypt the hop without enforcing peer
+            // verification (the proxy hostname is not on the backend's own cert).
+            $options['ssl_verify_peer'] = false;
+            $options['ssl_allow_self_signed'] = true;
+        }
+
+        $this->client->set($options);
 
         $this->auth = new Auth([
             'authcid' => $user,

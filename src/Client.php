@@ -142,7 +142,9 @@ class Client
         int $port,
         string $user,
         string $password,
-        bool $useCoroutine = false
+        bool $useCoroutine = false,
+        bool $tls = false,
+        array $tlsOptions = []
     ) {
         if (empty($database)) {
             throw new \InvalidArgumentException('Database name cannot be empty');
@@ -177,18 +179,34 @@ class Client
             }
         }
 
+        $flags = SWOOLE_SOCK_TCP | SWOOLE_KEEP;
+        if ($tls) {
+            $flags |= SWOOLE_SSL;
+        }
+
         $this->client = $useCoroutine
-            ? new CoroutineClient(SWOOLE_SOCK_TCP | SWOOLE_KEEP)
-            : new SwooleClient(SWOOLE_SOCK_TCP | SWOOLE_KEEP);
+            ? new CoroutineClient($flags)
+            : new SwooleClient($flags);
 
         // Set socket options to prevent hanging
-        $this->client->set([
+        $options = [
             'open_tcp_keepalive' => true,
             'tcp_keepidle' => 4,     // Start keepalive after 4s idle
             'tcp_keepinterval' => 3, // Keepalive interval 3s
             'tcp_keepcount' => 2,    // Close after 2 failed keepalives
             'timeout' => 30          // 30 second connection timeout
-        ]);
+        ];
+
+        if ($tls) {
+            // TLS is the mechanism; the caller owns the verification policy. Pass
+            // ssl_verify_peer / ssl_cafile / ssl_host_name (etc.) via $tlsOptions —
+            // e.g. verify against the system CA in production, or relax verification
+            // where the endpoint presents an untrusted certificate. Defaults to
+            // Swoole's behaviour when no options are given.
+            $options = array_merge($options, $tlsOptions);
+        }
+
+        $this->client->set($options);
 
         $this->auth = new Auth([
             'authcid' => $user,

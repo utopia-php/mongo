@@ -1662,8 +1662,12 @@ class Client
 
             // Check for write errors (duplicate key, etc.)
             if (\property_exists($result, 'writeErrors') && !empty($result->writeErrors)) {
-                throw new Exception(
+                throw new BulkWriteException(
                     $result->writeErrors[0]->errmsg,
+                    [
+                        'writeErrors' => $result->writeErrors,
+                        'nInserted' => $result->n ?? 0,
+                    ],
                     $result->writeErrors[0]->code
                 );
             }

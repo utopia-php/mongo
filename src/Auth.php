@@ -9,6 +9,7 @@ class Auth
     private string $authcid;
     private string $secret;
     private string $authzid;
+    private string $authSource;
     private string $gs2Header;
     private ?string $cnonce = null;
     private string $firstMessageBare;
@@ -23,6 +24,7 @@ class Auth
         $this->authcid = $options['authcid'] ?? '';
         $this->secret = $options['secret'] ?? '';
         $this->authzid = $options['authzid'] ?? '';
+        $this->authSource = $options['authSource'] ?? 'admin';
         $this->cnonce = base64_encode(random_bytes(32));
     }
 
@@ -39,7 +41,7 @@ class Auth
                 "autoAuthorize" => 1,
                 "options" => ["skipEmptyExchange" => true],
             ],
-            'admin'
+            $this->authSource
         ];
     }
 
@@ -61,7 +63,7 @@ class Auth
                 "conversationId" => $cid,
                 "payload" => $payload,
             ],
-            'admin'
+            $this->authSource
         ];
     }
 

@@ -134,6 +134,8 @@ class Client
      * @param string $user
      * @param string $password
      * @param Boolean $useCoroutine
+     * @param bool $tls
+     * @param array $tlsOptions
      * @param string|null $authSource Database to authenticate against; defaults to 'admin'.
      *     Set this when the user was created in a database other than admin (e.g. the
      *     application database itself).

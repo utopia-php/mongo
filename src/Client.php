@@ -134,6 +134,11 @@ class Client
      * @param string $user
      * @param string $password
      * @param Boolean $useCoroutine
+     * @param bool $tls
+     * @param array $tlsOptions
+     * @param string|null $authSource Database to authenticate against; defaults to 'admin'.
+     *     Set this when the user was created in a database other than admin (e.g. the
+     *     application database itself).
      * @throws \Exception
      */
     public function __construct(
@@ -144,7 +149,8 @@ class Client
         string $password,
         bool $useCoroutine = false,
         bool $tls = false,
-        array $tlsOptions = []
+        array $tlsOptions = [],
+        ?string $authSource = null
     ) {
         if (empty($database)) {
             throw new \InvalidArgumentException('Database name cannot be empty');
@@ -210,7 +216,8 @@ class Client
 
         $this->auth = new Auth([
             'authcid' => $user,
-            'secret' => Auth::encodeCredentials($user, $password)
+            'secret' => Auth::encodeCredentials($user, $password),
+            'authSource' => $authSource ?? 'admin',
         ]);
     }
 

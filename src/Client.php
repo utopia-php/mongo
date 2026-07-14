@@ -44,11 +44,13 @@ class Client
     private bool $isConnected = false;
 
     /**
-     * Socket / receive timeout in seconds.
+     * Socket / receive idle timeout in seconds.
      *
-     * Applied to the Swoole client `timeout` option and used as a wall-clock
+     * Applied to the Swoole client `timeout` option and used as an idle
      * deadline in receive(). recv() returning false already means this wait
      * elapsed — receive() must not multiply it with thousands of retries.
+     * The deadline resets whenever a real chunk arrives so large responses
+     * can still complete under load.
      */
     private float $receiveTimeout = 30.0;
 
@@ -228,6 +230,32 @@ class Client
             'secret' => Auth::encodeCredentials($user, $password),
             'authSource' => $authSource ?? 'admin',
         ]);
+    }
+
+    /**
+     * Set the socket / receive idle timeout in seconds.
+     *
+     * Updates both the Swoole client `timeout` option and the idle deadline
+     * used by receive(). Must be > 0.
+     */
+    public function setTimeout(float $seconds): self
+    {
+        if ($seconds <= 0) {
+            throw new \InvalidArgumentException('Timeout must be greater than 0');
+        }
+
+        $this->receiveTimeout = $seconds;
+        $this->client->set(['timeout' => $this->receiveTimeout]);
+
+        return $this;
+    }
+
+    /**
+     * Get the socket / receive idle timeout in seconds.
+     */
+    public function getTimeout(): float
+    {
+        return $this->receiveTimeout;
     }
 
     /**
@@ -431,10 +459,12 @@ class Client
             $this->connect();
             $result = $this->client->send($data);
             if ($result === false) {
-                $errCode = $this->client->errCode ?? $errCode;
+                // Prefer the first non-zero errCode (retry may report 0).
+                $errCode = ($this->client->errCode ?? 0) ?: $errCode;
                 throw new Exception(
                     'Failed to send data to MongoDB after reconnection attempt'
-                    . ($errCode !== 0 ? " (errCode={$errCode})" : '')
+                    . ($errCode !== 0 ? " (errCode={$errCode})" : ''),
+                    $errCode !== 0 ? $errCode : 9001 // SocketException
                 );
             }
         }
@@ -451,6 +481,10 @@ class Client
      * returning 0 bytes until the HTTP client's 120s curl timeout fires under
      * Mongo load).
      *
+     * The idle deadline resets whenever a real chunk arrives so large
+     * responses can finish under load; we only fail when the socket goes
+     * silent for `$receiveTimeout` seconds.
+     *
      * @throws Exception
      */
     private function receive(): stdClass|array|int
@@ -462,7 +496,7 @@ class Client
 
         do {
             if (\microtime(true) >= $deadline) {
-                throw new Exception('Receive timeout: no data received within reasonable time');
+                throw new Exception('Receive timeout: no data received within reasonable time', 11601);
             }
 
             $chunk = @$this->client->recv();
@@ -473,7 +507,8 @@ class Client
             if ($chunk === false) {
                 throw new Exception(
                     'Receive timeout: no data received within reasonable time'
-                    . ($errCode !== 0 ? " (errCode={$errCode})" : '')
+                    . ($errCode !== 0 ? " (errCode={$errCode})" : ''),
+                    11601 // SocketTimeout
                 );
             }
 
@@ -482,11 +517,12 @@ class Client
             if ($chunk === '' && $errCode !== 0) {
                 throw new Exception(
                     'Receive timeout: no data received within reasonable time'
-                    . " (errCode={$errCode})"
+                    . " (errCode={$errCode})",
+                    11601 // SocketTimeout
                 );
             }
 
-            // Transient empty read with no error; yield until deadline.
+            // Transient empty read with no error; yield until idle deadline.
             if ($chunk === '') {
                 if ($this->client instanceof CoroutineClient) {
                     Coroutine::sleep(0.001);
@@ -495,6 +531,10 @@ class Client
                 }
                 continue;
             }
+
+            // Activity: extend idle deadline so large multi-chunk responses
+            // are not cut off by a fixed wall-clock budget from the first byte.
+            $deadline = \microtime(true) + $this->receiveTimeout;
 
             $chunkLen = \strlen($chunk);
             $receivedLength += $chunkLen;

@@ -44,6 +44,15 @@ class Client
     private bool $isConnected = false;
 
     /**
+     * Socket / receive timeout in seconds.
+     *
+     * Applied to the Swoole client `timeout` option and used as a wall-clock
+     * deadline in receive(). recv() returning false already means this wait
+     * elapsed — receive() must not multiply it with thousands of retries.
+     */
+    private float $receiveTimeout = 30.0;
+
+    /**
      * Defines commands Mongo uses over wire protocol.
      */
 
@@ -200,7 +209,7 @@ class Client
             'tcp_keepidle' => 4,     // Start keepalive after 4s idle
             'tcp_keepinterval' => 3, // Keepalive interval 3s
             'tcp_keepcount' => 2,    // Close after 2 failed keepalives
-            'timeout' => 30          // 30 second connection timeout
+            'timeout' => $this->receiveTimeout,
         ];
 
         if ($tls) {
@@ -417,11 +426,16 @@ class Client
 
         // If send fails, try to reconnect once
         if ($result === false) {
+            $errCode = $this->client->errCode ?? 0;
             $this->close();
             $this->connect();
             $result = $this->client->send($data);
             if ($result === false) {
-                throw new Exception('Failed to send data to MongoDB after reconnection attempt');
+                $errCode = $this->client->errCode ?? $errCode;
+                throw new Exception(
+                    'Failed to send data to MongoDB after reconnection attempt'
+                    . ($errCode !== 0 ? " (errCode={$errCode})" : '')
+                );
             }
         }
 
@@ -430,6 +444,13 @@ class Client
 
     /**
      * Receive a message from connection.
+     *
+     * Swoole's socket `timeout` already bounds a single recv(). Treating false
+     * (or a timed-out empty read) as "try again" up to 10k times multiplies
+     * that into multi-minute hangs (observed as Appwrite create requests
+     * returning 0 bytes until the HTTP client's 120s curl timeout fires under
+     * Mongo load).
+     *
      * @throws Exception
      */
     private function receive(): stdClass|array|int
@@ -437,32 +458,43 @@ class Client
         $chunks = [];
         $receivedLength = 0;
         $responseLength = null;
-        $attempts = 0;
-        $maxAttempts = 10000;
-        $sleepTime = 100;
+        $deadline = \microtime(true) + $this->receiveTimeout;
 
         do {
+            if (\microtime(true) >= $deadline) {
+                throw new Exception('Receive timeout: no data received within reasonable time');
+            }
+
             $chunk = @$this->client->recv();
+            $errCode = $this->client->errCode ?? 0;
 
-            if ($chunk === false || $chunk === '') {
-                $attempts++;
-                if ($attempts >= $maxAttempts) {
-                    throw new Exception('Receive timeout: no data received within reasonable time');
-                }
+            // false => socket-level wait already elapsed with no payload.
+            // Do not retry: that turns one timeout into thousands.
+            if ($chunk === false) {
+                throw new Exception(
+                    'Receive timeout: no data received within reasonable time'
+                    . ($errCode !== 0 ? " (errCode={$errCode})" : '')
+                );
+            }
 
-                // Adaptive backoff: shorter delays for coroutines, longer for sync
+            // Some Swoole builds return "" on recv timeout instead of false.
+            // errCode != 0 distinguishes that from a transient empty read.
+            if ($chunk === '' && $errCode !== 0) {
+                throw new Exception(
+                    'Receive timeout: no data received within reasonable time'
+                    . " (errCode={$errCode})"
+                );
+            }
+
+            // Transient empty read with no error; yield until deadline.
+            if ($chunk === '') {
                 if ($this->client instanceof CoroutineClient) {
-                    Coroutine::sleep(0.001); // 1ms for coroutines
+                    Coroutine::sleep(0.001);
                 } else {
-                    \usleep((int)$sleepTime); // Microsecond precision for sync client
-                    $sleepTime = (int)\min($sleepTime * 1.2, 10000); // Cap at 10ms for faster checking
+                    \usleep(1000);
                 }
                 continue;
             }
-
-            // Reset attempts counter when we receive data
-            $attempts = 0;
-            $sleepTime = 100; // Reset to 0.1ms
 
             $chunkLen = \strlen($chunk);
             $receivedLength += $chunkLen;

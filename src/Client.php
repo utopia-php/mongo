@@ -44,6 +44,17 @@ class Client
     private bool $isConnected = false;
 
     /**
+     * Socket / receive idle timeout in seconds.
+     *
+     * Applied to the Swoole client `timeout` option and used as an idle
+     * deadline in receive(). recv() returning false already means this wait
+     * elapsed — receive() must not multiply it with thousands of retries.
+     * The deadline resets whenever a real chunk arrives so large responses
+     * can still complete under load.
+     */
+    private float $timeout = 30.0;
+
+    /**
      * Defines commands Mongo uses over wire protocol.
      */
 
@@ -139,6 +150,7 @@ class Client
      * @param string|null $authSource Database to authenticate against; defaults to 'admin'.
      *     Set this when the user was created in a database other than admin (e.g. the
      *     application database itself).
+     * @param float $timeout Socket / receive idle timeout in seconds (default 30).
      * @throws \Exception
      */
     public function __construct(
@@ -150,7 +162,8 @@ class Client
         bool $useCoroutine = false,
         bool $tls = false,
         array $tlsOptions = [],
-        ?string $authSource = null
+        ?string $authSource = null,
+        float $timeout = 30.0
     ) {
         if (empty($database)) {
             throw new \InvalidArgumentException('Database name cannot be empty');
@@ -167,11 +180,15 @@ class Client
         if (empty($password)) {
             throw new \InvalidArgumentException('Password cannot be empty');
         }
+        if ($timeout <= 0) {
+            throw new \InvalidArgumentException('Timeout must be greater than 0');
+        }
 
         $this->id = uniqid('utopia.mongo.client');
         $this->database = $database;
         $this->host = $host;
         $this->port = $port;
+        $this->timeout = $timeout;
 
         // Only use coroutines if explicitly requested and we're in a coroutine context
         if ($useCoroutine) {
@@ -200,7 +217,7 @@ class Client
             'tcp_keepidle' => 4,     // Start keepalive after 4s idle
             'tcp_keepinterval' => 3, // Keepalive interval 3s
             'tcp_keepcount' => 2,    // Close after 2 failed keepalives
-            'timeout' => 30          // 30 second connection timeout
+            'timeout' => $this->timeout,
         ];
 
         if ($tls) {
@@ -417,11 +434,18 @@ class Client
 
         // If send fails, try to reconnect once
         if ($result === false) {
+            $errCode = $this->client->errCode ?? 0;
             $this->close();
             $this->connect();
             $result = $this->client->send($data);
             if ($result === false) {
-                throw new Exception('Failed to send data to MongoDB after reconnection attempt');
+                // Prefer the first non-zero errCode (retry may report 0).
+                $errCode = ($this->client->errCode ?? 0) ?: $errCode;
+                throw new Exception(
+                    'Failed to send data to MongoDB after reconnection attempt'
+                    . ($errCode !== 0 ? " (errCode={$errCode})" : ''),
+                    $errCode !== 0 ? $errCode : 9001 // SocketException
+                );
             }
         }
 
@@ -430,6 +454,17 @@ class Client
 
     /**
      * Receive a message from connection.
+     *
+     * Swoole's socket `timeout` already bounds a single recv(). Treating false
+     * (or a timed-out empty read) as "try again" up to 10k times multiplies
+     * that into multi-minute hangs (observed as Appwrite create requests
+     * returning 0 bytes until the HTTP client's 120s curl timeout fires under
+     * Mongo load).
+     *
+     * The idle deadline resets whenever a real chunk arrives so large
+     * responses can finish under load; we only fail when the socket goes
+     * silent for `$timeout` seconds.
+     *
      * @throws Exception
      */
     private function receive(): stdClass|array|int
@@ -437,32 +472,49 @@ class Client
         $chunks = [];
         $receivedLength = 0;
         $responseLength = null;
-        $attempts = 0;
-        $maxAttempts = 10000;
-        $sleepTime = 100;
+        $deadline = \microtime(true) + $this->timeout;
 
         do {
+            if (\microtime(true) >= $deadline) {
+                throw new Exception('Receive timeout: no data received within reasonable time', 11601);
+            }
+
             $chunk = @$this->client->recv();
+            $errCode = $this->client->errCode ?? 0;
 
-            if ($chunk === false || $chunk === '') {
-                $attempts++;
-                if ($attempts >= $maxAttempts) {
-                    throw new Exception('Receive timeout: no data received within reasonable time');
-                }
+            // false => socket-level wait already elapsed with no payload.
+            // Do not retry: that turns one timeout into thousands.
+            if ($chunk === false) {
+                throw new Exception(
+                    'Receive timeout: no data received within reasonable time'
+                    . ($errCode !== 0 ? " (errCode={$errCode})" : ''),
+                    11601 // SocketTimeout
+                );
+            }
 
-                // Adaptive backoff: shorter delays for coroutines, longer for sync
+            // Some Swoole builds return "" on recv timeout instead of false.
+            // errCode != 0 distinguishes that from a transient empty read.
+            if ($chunk === '' && $errCode !== 0) {
+                throw new Exception(
+                    'Receive timeout: no data received within reasonable time'
+                    . " (errCode={$errCode})",
+                    11601 // SocketTimeout
+                );
+            }
+
+            // Transient empty read with no error; yield until idle deadline.
+            if ($chunk === '') {
                 if ($this->client instanceof CoroutineClient) {
-                    Coroutine::sleep(0.001); // 1ms for coroutines
+                    Coroutine::sleep(0.001);
                 } else {
-                    \usleep((int)$sleepTime); // Microsecond precision for sync client
-                    $sleepTime = (int)\min($sleepTime * 1.2, 10000); // Cap at 10ms for faster checking
+                    \usleep(1000);
                 }
                 continue;
             }
 
-            // Reset attempts counter when we receive data
-            $attempts = 0;
-            $sleepTime = 100; // Reset to 0.1ms
+            // Activity: extend idle deadline so large multi-chunk responses
+            // are not cut off by a fixed wall-clock budget from the first byte.
+            $deadline = \microtime(true) + $this->timeout;
 
             $chunkLen = \strlen($chunk);
             $receivedLength += $chunkLen;

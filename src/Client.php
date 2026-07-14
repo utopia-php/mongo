@@ -150,6 +150,7 @@ class Client
      * @param string|null $authSource Database to authenticate against; defaults to 'admin'.
      *     Set this when the user was created in a database other than admin (e.g. the
      *     application database itself).
+     * @param float $timeout Socket / receive idle timeout in seconds (default 30).
      * @throws \Exception
      */
     public function __construct(
@@ -161,7 +162,8 @@ class Client
         bool $useCoroutine = false,
         bool $tls = false,
         array $tlsOptions = [],
-        ?string $authSource = null
+        ?string $authSource = null,
+        float $timeout = 30.0
     ) {
         if (empty($database)) {
             throw new \InvalidArgumentException('Database name cannot be empty');
@@ -178,11 +180,15 @@ class Client
         if (empty($password)) {
             throw new \InvalidArgumentException('Password cannot be empty');
         }
+        if ($timeout <= 0) {
+            throw new \InvalidArgumentException('Timeout must be greater than 0');
+        }
 
         $this->id = uniqid('utopia.mongo.client');
         $this->database = $database;
         $this->host = $host;
         $this->port = $port;
+        $this->receiveTimeout = $timeout;
 
         // Only use coroutines if explicitly requested and we're in a coroutine context
         if ($useCoroutine) {
@@ -230,32 +236,6 @@ class Client
             'secret' => Auth::encodeCredentials($user, $password),
             'authSource' => $authSource ?? 'admin',
         ]);
-    }
-
-    /**
-     * Set the socket / receive idle timeout in seconds.
-     *
-     * Updates both the Swoole client `timeout` option and the idle deadline
-     * used by receive(). Must be > 0.
-     */
-    public function setTimeout(float $seconds): self
-    {
-        if ($seconds <= 0) {
-            throw new \InvalidArgumentException('Timeout must be greater than 0');
-        }
-
-        $this->receiveTimeout = $seconds;
-        $this->client->set(['timeout' => $this->receiveTimeout]);
-
-        return $this;
-    }
-
-    /**
-     * Get the socket / receive idle timeout in seconds.
-     */
-    public function getTimeout(): float
-    {
-        return $this->receiveTimeout;
     }
 
     /**

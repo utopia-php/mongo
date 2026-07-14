@@ -52,7 +52,7 @@ class Client
      * The deadline resets whenever a real chunk arrives so large responses
      * can still complete under load.
      */
-    private float $receiveTimeout = 30.0;
+    private float $timeout = 30.0;
 
     /**
      * Defines commands Mongo uses over wire protocol.
@@ -188,7 +188,7 @@ class Client
         $this->database = $database;
         $this->host = $host;
         $this->port = $port;
-        $this->receiveTimeout = $timeout;
+        $this->timeout = $timeout;
 
         // Only use coroutines if explicitly requested and we're in a coroutine context
         if ($useCoroutine) {
@@ -217,7 +217,7 @@ class Client
             'tcp_keepidle' => 4,     // Start keepalive after 4s idle
             'tcp_keepinterval' => 3, // Keepalive interval 3s
             'tcp_keepcount' => 2,    // Close after 2 failed keepalives
-            'timeout' => $this->receiveTimeout,
+            'timeout' => $this->timeout,
         ];
 
         if ($tls) {
@@ -463,7 +463,7 @@ class Client
      *
      * The idle deadline resets whenever a real chunk arrives so large
      * responses can finish under load; we only fail when the socket goes
-     * silent for `$receiveTimeout` seconds.
+     * silent for `$timeout` seconds.
      *
      * @throws Exception
      */
@@ -472,7 +472,7 @@ class Client
         $chunks = [];
         $receivedLength = 0;
         $responseLength = null;
-        $deadline = \microtime(true) + $this->receiveTimeout;
+        $deadline = \microtime(true) + $this->timeout;
 
         do {
             if (\microtime(true) >= $deadline) {
@@ -514,7 +514,7 @@ class Client
 
             // Activity: extend idle deadline so large multi-chunk responses
             // are not cut off by a fixed wall-clock budget from the first byte.
-            $deadline = \microtime(true) + $this->receiveTimeout;
+            $deadline = \microtime(true) + $this->timeout;
 
             $chunkLen = \strlen($chunk);
             $receivedLength += $chunkLen;

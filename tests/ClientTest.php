@@ -262,7 +262,7 @@ final class ClientTest extends TestCase
         $transport->sends = [['result' => false, 'error' => 11]];
         $transport->receives = [['result' => $this->frame(['ok' => 1.0]), 'error' => 0]];
         $client = $this->reconnectingClient($transport);
-        $this->seedState($client);
+        $this->seedConnectionContext($client);
 
         $result = $client->send('complete-message');
 
@@ -273,9 +273,7 @@ final class ClientTest extends TestCase
             array_column($transport->events, 0)
         );
         $this->assertSame([[true]], $transport->closes);
-        $sessions = $this->get($client, 'sessions');
-        $this->set($client, 'sessions', []);
-        $this->assertSame(['session' => ['id' => 'session']], $sessions);
+        $this->assertSame([], $this->get($client, 'sessions'));
         $this->assertConnectionContextCleared($client);
         $this->assertTrue($this->get($client, 'isConnected'));
     }
@@ -299,16 +297,19 @@ final class ClientTest extends TestCase
         $transport->receives = [
             ['result' => $this->frame(['ok' => 1.0]), 'error' => 0],
             ['result' => $this->frame(['ok' => 1.0]), 'error' => 0],
+            ['result' => $this->frame(['ok' => 1.0]), 'error' => 0],
         ];
 
         $operation = $client->query(['ping' => 1, 'session' => $session]);
         $commit = $client->commitTransaction($session);
+        $sessions = $this->get($client, 'sessions');
+        $ended = $client->endSessions([$session]);
 
         $this->assertSame(1.0, $operation->ok);
         $this->assertSame(1.0, $commit->ok);
-        $sessions = $this->get($client, 'sessions');
-        $this->set($client, 'sessions', []);
+        $this->assertSame(1.0, $ended->ok);
         $this->assertSame(Client::TRANSACTION_COMMITTED, $sessions[$session['sessionId']]['state']);
+        $this->assertSame([], $this->get($client, 'sessions'));
     }
 
     public function testCoroutineSendFailureHardClosesBeforeFreshFullMessageRetry(): void
@@ -560,8 +561,13 @@ final class ClientTest extends TestCase
 
     private function seedState(Client $client): void
     {
-        $this->set($client, 'isConnected', true);
+        $this->seedConnectionContext($client);
         $this->set($client, 'sessions', ['session' => ['id' => 'session']]);
+    }
+
+    private function seedConnectionContext(Client $client): void
+    {
+        $this->set($client, 'isConnected', true);
         $this->set($client, 'clusterTime', (object) ['time' => 1]);
         $this->set($client, 'operationTime', (object) ['time' => 2]);
         $this->set($client, 'replicaSet', true);

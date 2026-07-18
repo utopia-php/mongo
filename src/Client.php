@@ -436,8 +436,21 @@ class Client
         // A partial write corrupts the request boundary just like a failed write.
         if ($result !== $length) {
             $errCode = $this->client->errCode ?? 0;
+            $sessions = $this->sessions;
             $this->invalidate();
-            $this->connect();
+
+            try {
+                $this->connect();
+            } catch (\Throwable $error) {
+                if ($this->isConnected || $this->client->isConnected()) {
+                    $this->invalidate();
+                }
+
+                throw $error;
+            }
+
+            // Logical sessions survive only after a fresh socket authenticates.
+            $this->sessions = $sessions;
             $result = $this->client->send($data);
 
             if ($result !== $length) {
@@ -1746,6 +1759,8 @@ class Client
             throw new Exception('Response length mismatch');
         }
 
+        // query() emits OP_MSG and this parser decodes its 21-byte envelope.
+        // OP_REPLY uses an incompatible 36-byte envelope and is not supported.
         if ($headerData['opCode'] !== 2013) {
             $this->invalidate();
             throw new Exception('Invalid response operation code: ' . $headerData['opCode']);

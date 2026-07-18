@@ -2,6 +2,7 @@
 
 namespace Utopia\Tests;
 
+use MongoDB\BSON\Binary;
 use MongoDB\BSON\Document;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
@@ -15,6 +16,7 @@ use Utopia\Mongo\Exception;
 trait TransportDouble
 {
     public bool $open = true;
+    public array $connectionResults = [];
     public array $connects = [];
     public array $events = [];
     public array $receives = [];
@@ -25,9 +27,10 @@ trait TransportDouble
     {
         $this->events[] = ['connect', $host, $port, $timeout, $flags];
         $this->connects[] = [$host, $port, $timeout, $flags];
-        $this->open = true;
+        $result = array_shift($this->connectionResults) ?? true;
+        $this->open = $result;
 
-        return true;
+        return $result;
     }
 
     private function receiveTransport(): string|false
@@ -270,8 +273,42 @@ final class ClientTest extends TestCase
             array_column($transport->events, 0)
         );
         $this->assertSame([[true]], $transport->closes);
-        $this->assertContextCleared($client);
+        $sessions = $this->get($client, 'sessions');
+        $this->set($client, 'sessions', []);
+        $this->assertSame(['session' => ['id' => 'session']], $sessions);
+        $this->assertConnectionContextCleared($client);
         $this->assertTrue($this->get($client, 'isConnected'));
+    }
+
+    public function testSuccessfulSendRecoveryPreservesTransactionSessionForCommit(): void
+    {
+        $transport = new SyncTransportDouble();
+        $transport->receives = [[
+            'result' => $this->frame([
+                'ok' => 1.0,
+                'id' => ['id' => new Binary(str_repeat("\1", 16), Binary::TYPE_GENERIC)],
+            ]),
+            'error' => 0,
+        ]];
+        $client = $this->reconnectingClient($transport);
+        $this->set($client, 'isConnected', true);
+        $session = $client->startSession();
+        $this->assertTrue($client->startTransaction($session));
+
+        $transport->sends = [['result' => false, 'error' => 11]];
+        $transport->receives = [
+            ['result' => $this->frame(['ok' => 1.0]), 'error' => 0],
+            ['result' => $this->frame(['ok' => 1.0]), 'error' => 0],
+        ];
+
+        $operation = $client->query(['ping' => 1, 'session' => $session]);
+        $commit = $client->commitTransaction($session);
+
+        $this->assertSame(1.0, $operation->ok);
+        $this->assertSame(1.0, $commit->ok);
+        $sessions = $this->get($client, 'sessions');
+        $this->set($client, 'sessions', []);
+        $this->assertSame(Client::TRANSACTION_COMMITTED, $sessions[$session['sessionId']]['state']);
     }
 
     public function testCoroutineSendFailureHardClosesBeforeFreshFullMessageRetry(): void
@@ -326,6 +363,7 @@ final class ClientTest extends TestCase
             ['result' => false, 'error' => 0],
         ];
         $client = $this->reconnectingClient($transport);
+        $this->seedState($client);
 
         try {
             $client->send('complete-message');
@@ -335,6 +373,7 @@ final class ClientTest extends TestCase
         }
 
         $this->assertSame([[true], [true]], $transport->closes);
+        $this->assertStateCleared($client);
     }
 
     public function testRetryShortSendHardClosesReplacementTransport(): void
@@ -346,6 +385,7 @@ final class ClientTest extends TestCase
         ];
         $transport->receives = [['result' => $this->frame(['ok' => 1.0]), 'error' => 0]];
         $client = $this->reconnectingClient($transport);
+        $this->seedState($client);
 
         try {
             $client->send('complete-message');
@@ -355,6 +395,26 @@ final class ClientTest extends TestCase
         }
 
         $this->assertSame(2, $transport->closes);
+        $this->assertStateCleared($client);
+    }
+
+    public function testFailedReconnectDoesNotRestoreSessions(): void
+    {
+        $transport = new SyncTransportDouble();
+        $transport->sends = [['result' => false, 'error' => 11]];
+        $transport->connectionResults = [false];
+        $client = $this->client($transport);
+        $this->seedState($client);
+
+        try {
+            $client->send('complete-message');
+            $this->fail('Expected reconnect failure');
+        } catch (Exception $exception) {
+            $this->assertStringContainsString('Failed to connect to MongoDB', $exception->getMessage());
+        }
+
+        $this->assertSame([[true], [true]], $transport->closes);
+        $this->assertStateCleared($client);
     }
 
     public function testImpossibleFrameLengthHardClosesTransport(): void
@@ -393,6 +453,21 @@ final class ClientTest extends TestCase
         $this->assertSame(1, $transport->closes);
     }
 
+    public function testOpReplyIsRejectedByOpMsgParser(): void
+    {
+        $transport = new SyncTransportDouble();
+        $transport->receives = [[
+            'result' => pack('V*', 36, 1, 0, 1, 0, 0, 0, 0, 0),
+            'error' => 0,
+        ]];
+        $client = $this->client($transport);
+
+        $exception = $this->receiveException($client);
+
+        $this->assertStringContainsString('Invalid response operation code: 1', $exception->getMessage());
+        $this->assertSame([[true]], $transport->closes);
+    }
+
     public function testDecodedMongoCommandErrorDoesNotCloseTransport(): void
     {
         $transport = new SyncTransportDouble();
@@ -423,6 +498,11 @@ final class ClientTest extends TestCase
     private function assertContextCleared(Client $client): void
     {
         $this->assertSame([], $this->get($client, 'sessions'));
+        $this->assertConnectionContextCleared($client);
+    }
+
+    private function assertConnectionContextCleared(Client $client): void
+    {
         $this->assertNull($this->get($client, 'clusterTime'));
         $this->assertNull($this->get($client, 'operationTime'));
         $this->assertNull($this->get($client, 'replicaSet'));

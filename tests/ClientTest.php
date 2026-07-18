@@ -227,6 +227,21 @@ final class ClientTest extends TestCase
         $this->assertSame([], $transport->closes);
     }
 
+    public function testErroredEmptyReceiveHardClosesTransport(): void
+    {
+        $transport = new SyncTransportDouble();
+        $transport->receives = [['result' => '', 'error' => 11]];
+        $client = $this->client($transport);
+        $this->seedState($client);
+
+        $exception = $this->receiveException($client);
+
+        $this->assertSame(11601, $exception->getCode());
+        $this->assertStringContainsString('errCode=11', $exception->getMessage());
+        $this->assertSame([[true]], $transport->closes);
+        $this->assertStateCleared($client);
+    }
+
     public function testReceiveDeadlineHardClosesTransport(): void
     {
         $transport = new SyncTransportDouble();

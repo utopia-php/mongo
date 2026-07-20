@@ -4,7 +4,6 @@ namespace Utopia\Mongo;
 
 use MongoDB\BSON\Document;
 use MongoDB\BSON\Int64;
-use MongoDB\Driver\Exception\InvalidArgumentException;
 use Ramsey\Uuid\Uuid;
 use stdClass;
 use Swoole\Client as SwooleClient;
@@ -253,7 +252,8 @@ class Client
         if ($this->port <= 0 || $this->port > 65535) {
             throw new Exception('MongoDB port must be between 1 and 65535');
         }
-        if (!$this->client->connect($this->host, $this->port)) {
+        if (!$this->client->connect($this->host, $this->port, $this->timeout)) {
+            $this->invalidate();
             throw new Exception("Failed to connect to MongoDB at {$this->host}:{$this->port}");
         }
 
@@ -430,17 +430,33 @@ class Client
             $this->connect();
         }
 
+        $length = \strlen($data);
         $result = $this->client->send($data);
 
-        // If send fails, try to reconnect once
-        if ($result === false) {
+        // A partial write corrupts the request boundary just like a failed write.
+        if ($result !== $length) {
             $errCode = $this->client->errCode ?? 0;
-            $this->close();
-            $this->connect();
+            $sessions = $this->sessions;
+            $this->invalidate();
+
+            try {
+                $this->connect();
+            } catch (\Throwable $error) {
+                if ($this->isConnected || $this->client->isConnected()) {
+                    $this->invalidate();
+                }
+
+                throw $error;
+            }
+
+            // Logical sessions survive only after a fresh socket authenticates.
+            $this->sessions = $sessions;
             $result = $this->client->send($data);
-            if ($result === false) {
+
+            if ($result !== $length) {
                 // Prefer the first non-zero errCode (retry may report 0).
                 $errCode = ($this->client->errCode ?? 0) ?: $errCode;
+                $this->invalidate();
                 throw new Exception(
                     'Failed to send data to MongoDB after reconnection attempt'
                     . ($errCode !== 0 ? " (errCode={$errCode})" : ''),
@@ -476,6 +492,7 @@ class Client
 
         do {
             if (\microtime(true) >= $deadline) {
+                $this->invalidate();
                 throw new Exception('Receive timeout: no data received within reasonable time', 11601);
             }
 
@@ -485,6 +502,7 @@ class Client
             // false => socket-level wait already elapsed with no payload.
             // Do not retry: that turns one timeout into thousands.
             if ($chunk === false) {
+                $this->invalidate();
                 throw new Exception(
                     'Receive timeout: no data received within reasonable time'
                     . ($errCode !== 0 ? " (errCode={$errCode})" : ''),
@@ -495,6 +513,7 @@ class Client
             // Some Swoole builds return "" on recv timeout instead of false.
             // errCode != 0 distinguishes that from a transient empty read.
             if ($chunk === '' && $errCode !== 0) {
+                $this->invalidate();
                 throw new Exception(
                     'Receive timeout: no data received within reasonable time'
                     . " (errCode={$errCode})",
@@ -532,16 +551,23 @@ class Client
 
                 // Validate response length before allocating memory to prevent memory exhaustion
                 if ($responseLength > 16777216) { // 16MB limit
+                    $this->invalidate();
                     throw new Exception('Response too large: ' . $responseLength . ' bytes');
                 }
 
                 // Validate for negative or tiny values
                 if ($responseLength < 21) { // Minimum MongoDB message size
+                    $this->invalidate();
                     throw new Exception('Invalid response length: ' . $responseLength . ' bytes');
                 }
             }
 
-            if ($responseLength !== null && $receivedLength >= $responseLength) {
+            if ($responseLength !== null && $receivedLength > $responseLength) {
+                $this->invalidate();
+                throw new Exception('Response length mismatch');
+            }
+
+            if ($responseLength !== null && $receivedLength === $responseLength) {
                 break;
             }
         } while (true);
@@ -1657,10 +1683,37 @@ class Client
             $this->client->close();
         }
 
+        $this->reset();
+    }
+
+    /**
+     * Physically close a failed socket without writing session cleanup to it.
+     */
+    private function invalidate(): void
+    {
+        try {
+            if ($this->client instanceof CoroutineClient) {
+                @$this->client->close();
+            } else {
+                @$this->client->close(true);
+            }
+        } catch (\Throwable) {
+            // The transport may already be closed or only partially initialized.
+        } finally {
+            $this->reset();
+        }
+    }
+
+    /**
+     * Clear all state associated with the current physical connection.
+     */
+    private function reset(): void
+    {
         $this->isConnected = false;
         $this->sessions = [];
         $this->clusterTime = null;
         $this->operationTime = null;
+        $this->replicaSet = null;
     }
 
     /**
@@ -1686,7 +1739,13 @@ class Client
          * These 21 bytes are protocol metadata and precede the actual BSON-encoded document in the response.
          */
 
-        if (\strlen($response) < 21) {
+        if (\strlen($response) !== $responseLength) {
+            $this->invalidate();
+            throw new Exception('Response length mismatch');
+        }
+
+        if ($responseLength < 21) {
+            $this->invalidate();
             throw new Exception('Invalid response: too short');
         }
 
@@ -1695,19 +1754,32 @@ class Client
         $headerData = \unpack('VmessageLength/VrequestID/VresponseTo/VopCode', $header);
 
         // Validate message length
-        if ($headerData['messageLength'] !== $responseLength) {
+        if ($headerData === false || $headerData['messageLength'] !== $responseLength) {
+            $this->invalidate();
             throw new Exception('Response length mismatch');
         }
 
-        // Extract flag bits and payload type
-        $flagBits = \unpack('V', \substr($response, 16, 4))[1];
+        // query() emits OP_MSG and this parser decodes its 21-byte envelope.
+        // OP_REPLY uses an incompatible 36-byte envelope and is not supported.
+        if ($headerData['opCode'] !== 2013) {
+            $this->invalidate();
+            throw new Exception('Invalid response operation code: ' . $headerData['opCode']);
+        }
+
+        // Extract payload type after the flag bits.
         $payloadType = \ord(\substr($response, 20, 1));
+
+        if ($payloadType !== 0) {
+            $this->invalidate();
+            throw new Exception('Invalid response payload type: ' . $payloadType);
+        }
 
         // Extract BSON document (skip header + flagBits + payloadType)
         $bsonString = \substr($response, 21, $responseLength - 21);
 
         if (empty($bsonString)) {
-            return new \stdClass();
+            $this->invalidate();
+            throw new Exception('Invalid response: missing BSON document');
         }
 
         try {
@@ -1718,45 +1790,45 @@ class Client
             if (\is_array($result)) {
                 $result = (object)$result;
             }
+        } catch (\Throwable $error) {
+            $this->invalidate();
+            throw new Exception('Failed to parse BSON response: ' . $error->getMessage(), 0, $error);
+        }
 
-            // Check for write errors (duplicate key, etc.)
-            if (\property_exists($result, 'writeErrors') && !empty($result->writeErrors)) {
-                throw new Exception(
-                    $result->writeErrors[0]->errmsg,
-                    $result->writeErrors[0]->code
-                );
+        // These are fully decoded MongoDB command errors, not transport corruption.
+        if (\property_exists($result, 'writeErrors') && !empty($result->writeErrors)) {
+            $writeError = $result->writeErrors[0] ?? null;
+
+            if (\is_object($writeError) && isset($writeError->errmsg, $writeError->code)) {
+                throw new Exception($writeError->errmsg, $writeError->code);
             }
 
-            // Check for general MongoDB errors
-            if (\property_exists($result, 'errmsg')) {
-                throw new Exception(
-                    'E' . $result->code . ' ' . $result->codeName . ': ' . $result->errmsg,
-                    $result->code
-                );
-            }
+            $this->invalidate();
+            throw new Exception('Invalid write error response');
+        }
 
-            // Check for operation success
-            if (\property_exists($result, 'n') && $result->ok === 1.0) {
+        if (\property_exists($result, 'errmsg')) {
+            $code = (int)($result->code ?? 0);
+            $name = (string)($result->codeName ?? 'MongoError');
+
+            throw new Exception('E' . $code . ' ' . $name . ': ' . $result->errmsg, $code);
+        }
+
+        if (!\property_exists($result, 'ok')) {
+            $this->invalidate();
+            throw new Exception('Invalid response: missing operation status');
+        }
+
+        if ($result->ok === 1.0) {
+            if (\property_exists($result, 'n')) {
                 return $result->n;
             }
 
-            if (\property_exists($result, 'nonce') && $result->ok === 1.0) {
-                return $result;
-            }
-
-            if ($result->ok === 1.0) {
-                return $result;
-            }
-
-            return $result->cursor->firstBatch;
-        } catch (InvalidArgumentException $e) {
-            throw new Exception('Failed to parse BSON response: ' . $e->getMessage());
-        } catch (\Exception $e) {
-            if ($e instanceof Exception) {
-                throw $e;
-            }
-            throw new Exception('Error parsing response: ' . $e->getMessage());
+            return $result;
         }
+
+        $this->invalidate();
+        throw new Exception('Invalid unsuccessful response');
     }
 
     /**

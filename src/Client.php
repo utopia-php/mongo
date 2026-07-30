@@ -43,6 +43,11 @@ class Client
     private bool $isConnected = false;
 
     /**
+     * Whether the next operation must establish a fresh physical connection.
+     */
+    private bool $reconnect = false;
+
+    /**
      * Socket / receive idle timeout in seconds.
      *
      * Applied to the Swoole client `timeout` option and used as an idle
@@ -85,6 +90,8 @@ class Client
     public const UNKNOWN_TRANSACTION_COMMIT_RESULT = 'UnknownTransactionCommitResult';
     public const TRANSACTION_TIMEOUT_ERROR = 50;
     public const TRANSACTION_ABORTED_ERROR = 251;
+
+    private const PRIMARY_CHANGE_ERRORS = [189, 10107, 11602, 13435, 13436];
 
     // Transaction states
     public const TRANSACTION_NONE = 'none';
@@ -1689,8 +1696,10 @@ class Client
     /**
      * Physically close a failed socket without writing session cleanup to it.
      */
-    private function invalidate(): void
+    private function invalidate(bool $preserveSessions = false): void
     {
+        $sessions = $preserveSessions ? $this->sessions : [];
+
         try {
             if ($this->client instanceof CoroutineClient) {
                 @$this->client->close();
@@ -1701,6 +1710,10 @@ class Client
             // The transport may already be closed or only partially initialized.
         } finally {
             $this->reset();
+            if ($preserveSessions) {
+                $this->sessions = $sessions;
+                $this->reconnect = true;
+            }
         }
     }
 
@@ -1710,6 +1723,7 @@ class Client
     private function reset(): void
     {
         $this->isConnected = false;
+        $this->reconnect = false;
         $this->sessions = [];
         $this->clusterTime = null;
         $this->operationTime = null;
@@ -1800,7 +1814,12 @@ class Client
             $writeError = $result->writeErrors[0] ?? null;
 
             if (\is_object($writeError) && isset($writeError->errmsg, $writeError->code)) {
-                throw new Exception($writeError->errmsg, $writeError->code);
+                $code = (int)$writeError->code;
+                if (self::isPrimaryChange($code)) {
+                    $this->invalidate(preserveSessions: true);
+                }
+
+                throw new Exception($writeError->errmsg, $code);
             }
 
             $this->invalidate();
@@ -1810,6 +1829,10 @@ class Client
         if (\property_exists($result, 'errmsg')) {
             $code = (int)($result->code ?? 0);
             $name = (string)($result->codeName ?? 'MongoError');
+
+            if (self::isPrimaryChange($code)) {
+                $this->invalidate(preserveSessions: true);
+            }
 
             throw new Exception('E' . $code . ' ' . $name . ': ' . $result->errmsg, $code);
         }
@@ -1829,6 +1852,11 @@ class Client
 
         $this->invalidate();
         throw new Exception('Invalid unsuccessful response');
+    }
+
+    private static function isPrimaryChange(int $code): bool
+    {
+        return \in_array($code, self::PRIMARY_CHANGE_ERRORS, true);
     }
 
     /**
@@ -2039,6 +2067,20 @@ class Client
      */
     private function validateConnection(): void
     {
+        if ($this->reconnect) {
+            $sessions = $this->sessions;
+            $this->reconnect = false;
+
+            try {
+                $this->connect();
+            } finally {
+                $this->sessions = $sessions;
+                if (!$this->isConnected || !$this->client->isConnected()) {
+                    $this->reconnect = true;
+                }
+            }
+        }
+
         if (!$this->isConnected) {
             throw new Exception('Client is not connected to MongoDB');
         }

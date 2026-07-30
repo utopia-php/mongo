@@ -490,6 +490,141 @@ final class ClientTest extends TestCase
         $this->assertTrue($transport->open);
     }
 
+    public function testPrimaryChangeErrorsCloseTransportAndPreserveSessions(): void
+    {
+        foreach ([189, 10107, 11602, 13435, 13436] as $code) {
+            $transport = new SyncTransportDouble();
+            $transport->receives = [[
+                'result' => $this->frame([
+                    'ok' => 0.0,
+                    'errmsg' => 'primary changed',
+                    'code' => $code,
+                    'codeName' => 'PrimaryChanged',
+                ]),
+                'error' => 0,
+            ]];
+            $client = $this->client($transport);
+            $this->seedState($client);
+            $sessions = $this->get($client, 'sessions');
+
+            $exception = $this->receiveException($client);
+
+            try {
+                $this->assertSame($code, $exception->getCode());
+                $this->assertSame([[true]], $transport->closes);
+                $this->assertSame($sessions, $this->get($client, 'sessions'));
+                $this->assertFalse($this->get($client, 'isConnected'));
+                $this->assertTrue($this->get($client, 'reconnect'));
+                $this->assertConnectionContextCleared($client);
+            } finally {
+                $this->set($client, 'sessions', []);
+            }
+        }
+    }
+
+    public function testPrimaryChangeWriteErrorClosesTransportAndPreservesSessions(): void
+    {
+        $transport = new SyncTransportDouble();
+        $transport->receives = [[
+            'result' => $this->frame([
+                'ok' => 1.0,
+                'writeErrors' => [[
+                    'errmsg' => 'not primary',
+                    'code' => 10107,
+                ]],
+            ]),
+            'error' => 0,
+        ]];
+        $client = $this->client($transport);
+        $this->seedState($client);
+        $sessions = $this->get($client, 'sessions');
+
+        $exception = $this->receiveException($client);
+
+        try {
+            $this->assertSame(10107, $exception->getCode());
+            $this->assertSame([[true]], $transport->closes);
+            $this->assertSame($sessions, $this->get($client, 'sessions'));
+            $this->assertFalse($this->get($client, 'isConnected'));
+            $this->assertTrue($this->get($client, 'reconnect'));
+            $this->assertConnectionContextCleared($client);
+        } finally {
+            $this->set($client, 'sessions', []);
+        }
+    }
+
+    public function testPermanentWriteErrorDoesNotCloseTransport(): void
+    {
+        $transport = new SyncTransportDouble();
+        $transport->receives = [[
+            'result' => $this->frame([
+                'ok' => 1.0,
+                'writeErrors' => [[
+                    'errmsg' => 'duplicate key',
+                    'code' => 11000,
+                ]],
+            ]),
+            'error' => 0,
+        ]];
+        $client = $this->client($transport);
+
+        $exception = $this->receiveException($client);
+
+        $this->assertSame(11000, $exception->getCode());
+        $this->assertSame([], $transport->closes);
+        $this->assertTrue($transport->open);
+    }
+
+    public function testTransactionRetriesOnAFreshTransportAfterPrimaryChange(): void
+    {
+        $transport = new SyncTransportDouble();
+        $transport->receives = [
+            [
+                'result' => $this->frame([
+                    'ok' => 0.0,
+                    'errmsg' => 'not primary',
+                    'code' => 10107,
+                    'codeName' => 'NotWritablePrimary',
+                ]),
+                'error' => 0,
+            ],
+            ['result' => $this->frame(['ok' => 1.0]), 'error' => 0],
+            ['result' => $this->frame(['ok' => 1.0]), 'error' => 0],
+            ['result' => $this->frame(['ok' => 1.0]), 'error' => 0],
+        ];
+        $client = $this->reconnectingClient($transport);
+        $identifier = (object) ['id' => new Binary(str_repeat("\1", 16), Binary::TYPE_GENERIC)];
+        $session = ['id' => $identifier, 'sessionId' => 'session'];
+        $this->set($client, 'isConnected', true);
+        $this->set($client, 'sessions', [
+            'session' => [
+                'id' => $identifier,
+                'state' => Client::TRANSACTION_NONE,
+                'txnNumber' => 0,
+                'lastUse' => time(),
+                'operationTime' => null,
+                'clusterTime' => null,
+                'options' => [],
+                'retryableWriteNumber' => 0,
+            ],
+        ]);
+
+        $result = $client->withTransaction(
+            $session,
+            fn (array $transaction): mixed => $client->query(['ping' => 1, 'session' => $transaction]),
+            ['retryDelayMs' => 0],
+        );
+        $sessions = $this->get($client, 'sessions');
+
+        $this->assertSame(1.0, $result->ok);
+        $this->assertSame(Client::TRANSACTION_COMMITTED, $sessions['session']['state']);
+        $this->assertSame(2, $sessions['session']['txnNumber']);
+        $this->assertSame([[true]], $transport->closes);
+        $this->assertCount(1, $transport->connects);
+        $this->assertFalse($this->get($client, 'reconnect'));
+        $this->set($client, 'sessions', []);
+    }
+
     private function assertStateCleared(Client $client): void
     {
         $this->assertFalse($this->get($client, 'isConnected'));
@@ -562,7 +697,18 @@ final class ClientTest extends TestCase
     private function seedState(Client $client): void
     {
         $this->seedConnectionContext($client);
-        $this->set($client, 'sessions', ['session' => ['id' => 'session']]);
+        $this->set($client, 'sessions', [
+            'session' => [
+                'id' => (object) ['id' => 'session'],
+                'state' => Client::TRANSACTION_NONE,
+                'txnNumber' => 0,
+                'lastUse' => time(),
+                'operationTime' => null,
+                'clusterTime' => null,
+                'options' => [],
+                'retryableWriteNumber' => 0,
+            ],
+        ]);
     }
 
     private function seedConnectionContext(Client $client): void

@@ -201,8 +201,8 @@ final class ClientTest extends TestCase
             $transport->connects,
             'The dial must use the connect deadline, not the steady-state receive timeout',
         );
-        $this->assertFalse(
-            $this->get($client, 'handshaking'),
+        $this->assertNull(
+            $this->get($client, 'handshakeDeadline'),
             'A completed handshake must restore the steady-state receive deadline',
         );
     }
@@ -237,9 +237,69 @@ final class ClientTest extends TestCase
             microtime(true) - $startedAt,
             'The silent handshake must fail at the connect deadline, not the receive timeout',
         );
-        $this->assertFalse(
-            $this->get($client, 'handshaking'),
+        $this->assertNull(
+            $this->get($client, 'handshakeDeadline'),
             'A failed handshake must not leave the connect deadline armed on a reused client',
+        );
+    }
+
+    public function testDialAndHandshakeConsumeOneSharedConnectBudget(): void
+    {
+        // Each phase must receive the remainder of one absolute deadline — a
+        // fresh allowance per phase lets the complete attempt take a multiple
+        // of the configured bound (greptile P1 on #46).
+        $transport = new SyncTransportDouble();
+        $client = $this->client($transport, timeout: 5.0, connectTimeout: 0.2);
+        $this->set($client, 'handshakeDeadline', microtime(true) + 0.2);
+
+        $first = $this->invokeReceiveTimeout($client);
+        usleep(100_000);
+        $second = $this->invokeReceiveTimeout($client);
+
+        $this->assertLessThan(0.21, $first);
+        $this->assertLessThan(
+            $first,
+            $second,
+            'Handshake receives must consume the shared connect budget, not restart it',
+        );
+
+        $this->set($client, 'handshakeDeadline', null);
+        $this->assertSame(5.0, $this->invokeReceiveTimeout($client), 'Steady state must use the receive timeout');
+    }
+
+    public function testFailedHandshakeInvalidatesTheDialedSocket(): void
+    {
+        // A dialed-but-unauthenticated socket must never be reused: the
+        // transport reports connected, so a later connect() would early-return
+        // without ever completing authentication (CodeRabbit on #46).
+        $transport = new SyncTransportDouble();
+        $transport->open = false;
+        $transport->receives = [
+            ['result' => $this->frame(['ok' => 0.0, 'errmsg' => 'Authentication failed', 'code' => 18]), 'error' => 0],
+        ];
+        $client = $this->client($transport, timeout: 0.2);
+        $this->set($client, 'auth', new AuthenticationDouble());
+
+        try {
+            $client->connect();
+            $this->fail('A failed SCRAM exchange must throw');
+        } catch (Exception) {
+        }
+
+        $this->assertNotSame([], $transport->closes, 'The half-authenticated transport must be closed');
+        $this->assertFalse($this->get($client, 'isConnected'));
+
+        $transport->receives = [
+            ['result' => $this->frame(['ok' => 1.0]), 'error' => 0],
+            ['result' => $this->frame(['ok' => 1.0]), 'error' => 0],
+        ];
+        $transport->open = false;
+        $client->connect();
+
+        $this->assertCount(
+            2,
+            $transport->connects,
+            'A connect() after a failed handshake must dial again, never reuse the unauthenticated socket',
         );
     }
 
@@ -741,6 +801,14 @@ final class ClientTest extends TestCase
     private function receive(Client $client): mixed
     {
         $reflection = new ReflectionMethod(Client::class, 'receive');
+        $reflection->setAccessible(true);
+
+        return $reflection->invoke($client);
+    }
+
+    private function invokeReceiveTimeout(Client $client): float
+    {
+        $reflection = new ReflectionMethod(Client::class, 'receiveTimeout');
         $reflection->setAccessible(true);
 
         return $reflection->invoke($client);

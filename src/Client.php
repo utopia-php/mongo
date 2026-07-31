@@ -75,10 +75,11 @@ class Client
     private ?float $connectTimeout = null;
 
     /**
-     * True while connect() is running its SCRAM exchange, so receive() applies
-     * the connect deadline rather than the steady-state one.
+     * Absolute deadline for the in-flight connect() — the dial and the SCRAM
+     * exchange share it, so however the budget is split between phases, the
+     * whole attempt is bounded once. Null outside connect().
      */
-    private bool $handshaking = false;
+    private ?float $handshakeDeadline = null;
 
     /**
      * Defines commands Mongo uses over wire protocol.
@@ -291,32 +292,42 @@ class Client
         if ($this->port <= 0 || $this->port > 65535) {
             throw new Exception('MongoDB port must be between 1 and 65535');
         }
-        $connectTimeout = $this->connectTimeout ?? $this->timeout;
-        if (!$this->client->connect($this->host, $this->port, $connectTimeout)) {
-            $this->invalidate();
-            throw new Exception("Failed to connect to MongoDB at {$this->host}:{$this->port}");
-        }
-
-        $this->isConnected = true;
-
-        // The SCRAM exchange below runs through receive(), so the handshake has
-        // to carry the connect deadline too — behind a proxy that accepts
-        // instantly, the dial is never what stalls, the first server reply is.
-        $this->handshaking = true;
+        // One absolute deadline for the whole attempt: the dial and every SCRAM
+        // receive consume from the same budget, so a phase that eats most of it
+        // leaves only the remainder — not a fresh allowance — for the next.
+        // Behind a proxy that accepts instantly, the dial is never what stalls,
+        // the first server reply is.
+        $budget = $this->connectTimeout ?? $this->timeout;
+        $this->handshakeDeadline = \microtime(true) + $budget;
 
         try {
-            [$payload, $db] = $this->auth->start();
+            if (!$this->client->connect($this->host, $this->port, $budget)) {
+                $this->invalidate();
+                throw new Exception("Failed to connect to MongoDB at {$this->host}:{$this->port}");
+            }
 
-            $res = $this->query($payload, $db);
+            $this->isConnected = true;
 
-            [$payload, $db] = $this->auth->continue($res);
+            try {
+                [$payload, $db] = $this->auth->start();
 
-            $this->query($payload, $db);
+                $res = $this->query($payload, $db);
+
+                [$payload, $db] = $this->auth->continue($res);
+
+                $this->query($payload, $db);
+            } catch (\Throwable $error) {
+                // A dialed-but-unauthenticated socket must never be reused: the
+                // transport reports connected, so a later connect() would
+                // early-return without ever completing authentication.
+                $this->invalidate();
+                throw $error;
+            }
         } finally {
-            // Always, so a slow first real query never inherits the short
-            // handshake bound — and a failed handshake never leaves it armed
-            // on a client the caller may reuse.
-            $this->handshaking = false;
+            // Always, so a slow first real query never inherits the handshake
+            // bound — and a failed handshake never leaves it armed on a client
+            // the caller may reuse.
+            $this->handshakeDeadline = null;
         }
 
         return $this;
@@ -525,9 +536,14 @@ class Client
      */
     private function receiveTimeout(): float
     {
-        return $this->handshaking
-            ? ($this->connectTimeout ?? $this->timeout)
-            : $this->timeout;
+        if ($this->handshakeDeadline === null) {
+            return $this->timeout;
+        }
+
+        // The remainder of the connect budget, never a fresh allowance — so
+        // chunk-arrival renewals inside receive() shrink toward the absolute
+        // deadline instead of extending past it.
+        return \max(0.001, $this->handshakeDeadline - \microtime(true));
     }
 
     /**

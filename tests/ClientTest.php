@@ -183,6 +183,66 @@ final class ClientTest extends TestCase
         $this->assertSame([['mongo', 27017, 7.5, 0]], $transport->connects);
     }
 
+    public function testConnectDialsAndHandshakesUnderTheConnectDeadline(): void
+    {
+        $transport = new SyncTransportDouble();
+        $transport->open = false;
+        $transport->receives = [
+            ['result' => $this->frame(['ok' => 1.0]), 'error' => 0],
+            ['result' => $this->frame(['ok' => 1.0]), 'error' => 0],
+        ];
+        $client = $this->client($transport, timeout: 7.5, connectTimeout: 1.5);
+        $this->set($client, 'auth', new AuthenticationDouble());
+
+        $client->connect();
+
+        $this->assertSame(
+            [['mongo', 27017, 1.5, 0]],
+            $transport->connects,
+            'The dial must use the connect deadline, not the steady-state receive timeout',
+        );
+        $this->assertFalse(
+            $this->get($client, 'handshaking'),
+            'A completed handshake must restore the steady-state receive deadline',
+        );
+    }
+
+    public function testHandshakeSilenceFailsAtTheConnectDeadline(): void
+    {
+        // Behind a proxy that accepts instantly while its backend is
+        // unreachable, the dial is never what stalls — the first handshake
+        // reply is. Without a separate connect deadline the handshake waited
+        // out the full receive timeout, doubling every outage the pool's
+        // recovery was trying to shorten.
+        $transport = new SyncTransportDouble();
+        $transport->open = false;
+        $transport->receives = [
+            ['result' => '', 'error' => 0],
+            ['result' => '', 'error' => 0],
+            ['result' => '', 'error' => 0],
+        ];
+        $client = $this->client($transport, timeout: 5.0, connectTimeout: 0.05);
+        $this->set($client, 'auth', new AuthenticationDouble());
+
+        $startedAt = microtime(true);
+        try {
+            $client->connect();
+            $this->fail('A silent handshake must fail at the connect deadline');
+        } catch (Exception $exception) {
+            $this->assertSame(11601, $exception->getCode());
+        }
+
+        $this->assertLessThan(
+            1.0,
+            microtime(true) - $startedAt,
+            'The silent handshake must fail at the connect deadline, not the receive timeout',
+        );
+        $this->assertFalse(
+            $this->get($client, 'handshaking'),
+            'A failed handshake must not leave the connect deadline armed on a reused client',
+        );
+    }
+
     public function testSyncReceiveFailureHardClosesAndClearsState(): void
     {
         $transport = new SyncTransportDouble();
@@ -644,9 +704,20 @@ final class ClientTest extends TestCase
         $this->assertNull($this->get($client, 'replicaSet'));
     }
 
-    private function client(SwooleClient|CoroutineClient $transport, float $timeout = 0.05): Client
-    {
-        $client = new Client('testing', 'mongo', 27017, 'root', 'example', timeout: $timeout);
+    private function client(
+        SwooleClient|CoroutineClient $transport,
+        float $timeout = 0.05,
+        ?float $connectTimeout = null,
+    ): Client {
+        $client = new Client(
+            'testing',
+            'mongo',
+            27017,
+            'root',
+            'example',
+            timeout: $timeout,
+            connectTimeout: $connectTimeout,
+        );
         $this->set($client, 'client', $transport);
 
         return $client;

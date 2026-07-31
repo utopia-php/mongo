@@ -59,6 +59,28 @@ class Client
     private float $timeout = 30.0;
 
     /**
+     * Deadline for establishing a connection: the TCP dial plus the SCRAM
+     * handshake that connect() runs before returning a usable client.
+     *
+     * Separate from {@see $timeout} because the two answer different
+     * questions. A steady-state operation may legitimately wait a long time
+     * for a large or slow response. Establishing a connection may not: the
+     * pool calls connect() through reconnect() to salvage a connection whose
+     * operation just failed, and behind a proxy that accepts instantly while
+     * its backend is unreachable, that salvage attempt cost a second full
+     * receive timeout on top of the failure — doubling every outage the pool
+     * was trying to shorten. Defaults to $timeout so existing callers keep
+     * their current behaviour.
+     */
+    private ?float $connectTimeout = null;
+
+    /**
+     * True while connect() is running its SCRAM exchange, so receive() applies
+     * the connect deadline rather than the steady-state one.
+     */
+    private bool $handshaking = false;
+
+    /**
      * Defines commands Mongo uses over wire protocol.
      */
 
@@ -157,6 +179,11 @@ class Client
      *     Set this when the user was created in a database other than admin (e.g. the
      *     application database itself).
      * @param float $timeout Socket / receive idle timeout in seconds (default 30).
+     * @param float|null $connectTimeout Deadline for the TCP dial plus SCRAM
+     *     handshake, in seconds. Defaults to $timeout. Set it lower than
+     *     $timeout when connecting through a proxy, so a reconnect against an
+     *     unreachable backend fails fast instead of spending a second full
+     *     receive timeout.
      * @throws \Exception
      */
     public function __construct(
@@ -169,7 +196,8 @@ class Client
         bool $tls = false,
         array $tlsOptions = [],
         ?string $authSource = null,
-        float $timeout = 30.0
+        float $timeout = 30.0,
+        ?float $connectTimeout = null
     ) {
         if (empty($database)) {
             throw new \InvalidArgumentException('Database name cannot be empty');
@@ -189,12 +217,16 @@ class Client
         if ($timeout <= 0) {
             throw new \InvalidArgumentException('Timeout must be greater than 0');
         }
+        if ($connectTimeout !== null && $connectTimeout <= 0) {
+            throw new \InvalidArgumentException('Connect timeout must be greater than 0');
+        }
 
         $this->id = uniqid('utopia.mongo.client');
         $this->database = $database;
         $this->host = $host;
         $this->port = $port;
         $this->timeout = $timeout;
+        $this->connectTimeout = $connectTimeout;
 
         // Only use coroutines if explicitly requested and we're in a coroutine context
         if ($useCoroutine) {
@@ -259,20 +291,33 @@ class Client
         if ($this->port <= 0 || $this->port > 65535) {
             throw new Exception('MongoDB port must be between 1 and 65535');
         }
-        if (!$this->client->connect($this->host, $this->port, $this->timeout)) {
+        $connectTimeout = $this->connectTimeout ?? $this->timeout;
+        if (!$this->client->connect($this->host, $this->port, $connectTimeout)) {
             $this->invalidate();
             throw new Exception("Failed to connect to MongoDB at {$this->host}:{$this->port}");
         }
 
         $this->isConnected = true;
 
-        [$payload, $db] = $this->auth->start();
+        // The SCRAM exchange below runs through receive(), so the handshake has
+        // to carry the connect deadline too — behind a proxy that accepts
+        // instantly, the dial is never what stalls, the first server reply is.
+        $this->handshaking = true;
 
-        $res = $this->query($payload, $db);
+        try {
+            [$payload, $db] = $this->auth->start();
 
-        [$payload, $db] = $this->auth->continue($res);
+            $res = $this->query($payload, $db);
 
-        $this->query($payload, $db);
+            [$payload, $db] = $this->auth->continue($res);
+
+            $this->query($payload, $db);
+        } finally {
+            // Always, so a slow first real query never inherits the short
+            // handshake bound — and a failed handshake never leaves it armed
+            // on a client the caller may reuse.
+            $this->handshaking = false;
+        }
 
         return $this;
     }
@@ -476,6 +521,16 @@ class Client
     }
 
     /**
+     * The deadline a single receive() may spend waiting for the peer.
+     */
+    private function receiveTimeout(): float
+    {
+        return $this->handshaking
+            ? ($this->connectTimeout ?? $this->timeout)
+            : $this->timeout;
+    }
+
+    /**
      * Receive a message from connection.
      *
      * Swoole's socket `timeout` already bounds a single recv(). Treating false
@@ -495,7 +550,7 @@ class Client
         $chunks = [];
         $receivedLength = 0;
         $responseLength = null;
-        $deadline = \microtime(true) + $this->timeout;
+        $deadline = \microtime(true) + $this->receiveTimeout();
 
         do {
             if (\microtime(true) >= $deadline) {
@@ -540,7 +595,7 @@ class Client
 
             // Activity: extend idle deadline so large multi-chunk responses
             // are not cut off by a fixed wall-clock budget from the first byte.
-            $deadline = \microtime(true) + $this->timeout;
+            $deadline = \microtime(true) + $this->receiveTimeout();
 
             $chunkLen = \strlen($chunk);
             $receivedLength += $chunkLen;

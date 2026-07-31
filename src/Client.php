@@ -59,6 +59,29 @@ class Client
     private float $timeout = 30.0;
 
     /**
+     * Deadline for establishing a connection: the TCP dial plus the SCRAM
+     * handshake that connect() runs before returning a usable client.
+     *
+     * Separate from {@see $timeout} because the two answer different
+     * questions. A steady-state operation may legitimately wait a long time
+     * for a large or slow response. Establishing a connection may not: the
+     * pool calls connect() through reconnect() to salvage a connection whose
+     * operation just failed, and behind a proxy that accepts instantly while
+     * its backend is unreachable, that salvage attempt cost a second full
+     * receive timeout on top of the failure — doubling every outage the pool
+     * was trying to shorten. Defaults to $timeout so existing callers keep
+     * their current behaviour.
+     */
+    private ?float $connectTimeout = null;
+
+    /**
+     * Absolute deadline for the in-flight connect() — the dial and the SCRAM
+     * exchange share it, so however the budget is split between phases, the
+     * whole attempt is bounded once. Null outside connect().
+     */
+    private ?float $handshakeDeadline = null;
+
+    /**
      * Defines commands Mongo uses over wire protocol.
      */
 
@@ -157,6 +180,11 @@ class Client
      *     Set this when the user was created in a database other than admin (e.g. the
      *     application database itself).
      * @param float $timeout Socket / receive idle timeout in seconds (default 30).
+     * @param float|null $connectTimeout Deadline for the TCP dial plus SCRAM
+     *     handshake, in seconds. Defaults to $timeout. Set it lower than
+     *     $timeout when connecting through a proxy, so a reconnect against an
+     *     unreachable backend fails fast instead of spending a second full
+     *     receive timeout.
      * @throws \Exception
      */
     public function __construct(
@@ -169,7 +197,8 @@ class Client
         bool $tls = false,
         array $tlsOptions = [],
         ?string $authSource = null,
-        float $timeout = 30.0
+        float $timeout = 30.0,
+        ?float $connectTimeout = null
     ) {
         if (empty($database)) {
             throw new \InvalidArgumentException('Database name cannot be empty');
@@ -189,12 +218,16 @@ class Client
         if ($timeout <= 0) {
             throw new \InvalidArgumentException('Timeout must be greater than 0');
         }
+        if ($connectTimeout !== null && $connectTimeout <= 0) {
+            throw new \InvalidArgumentException('Connect timeout must be greater than 0');
+        }
 
         $this->id = uniqid('utopia.mongo.client');
         $this->database = $database;
         $this->host = $host;
         $this->port = $port;
         $this->timeout = $timeout;
+        $this->connectTimeout = $connectTimeout;
 
         // Only use coroutines if explicitly requested and we're in a coroutine context
         if ($useCoroutine) {
@@ -259,20 +292,43 @@ class Client
         if ($this->port <= 0 || $this->port > 65535) {
             throw new Exception('MongoDB port must be between 1 and 65535');
         }
-        if (!$this->client->connect($this->host, $this->port, $this->timeout)) {
-            $this->invalidate();
-            throw new Exception("Failed to connect to MongoDB at {$this->host}:{$this->port}");
+        // One absolute deadline for the whole attempt: the dial and every SCRAM
+        // receive consume from the same budget, so a phase that eats most of it
+        // leaves only the remainder — not a fresh allowance — for the next.
+        // Behind a proxy that accepts instantly, the dial is never what stalls,
+        // the first server reply is.
+        $budget = $this->connectTimeout ?? $this->timeout;
+        $this->handshakeDeadline = \microtime(true) + $budget;
+
+        try {
+            if (!$this->client->connect($this->host, $this->port, $budget)) {
+                $this->invalidate();
+                throw new Exception("Failed to connect to MongoDB at {$this->host}:{$this->port}");
+            }
+
+            $this->isConnected = true;
+
+            try {
+                [$payload, $db] = $this->auth->start();
+
+                $res = $this->query($payload, $db);
+
+                [$payload, $db] = $this->auth->continue($res);
+
+                $this->query($payload, $db);
+            } catch (\Throwable $error) {
+                // A dialed-but-unauthenticated socket must never be reused: the
+                // transport reports connected, so a later connect() would
+                // early-return without ever completing authentication.
+                $this->invalidate();
+                throw $error;
+            }
+        } finally {
+            // Always, so a slow first real query never inherits the handshake
+            // bound — and a failed handshake never leaves it armed on a client
+            // the caller may reuse.
+            $this->handshakeDeadline = null;
         }
-
-        $this->isConnected = true;
-
-        [$payload, $db] = $this->auth->start();
-
-        $res = $this->query($payload, $db);
-
-        [$payload, $db] = $this->auth->continue($res);
-
-        $this->query($payload, $db);
 
         return $this;
     }
@@ -476,6 +532,46 @@ class Client
     }
 
     /**
+     * The deadline a single receive() may spend waiting for the peer.
+     */
+    private function receiveTimeout(): float
+    {
+        if ($this->handshakeDeadline === null) {
+            return $this->timeout;
+        }
+
+        // The remainder of the connect budget, never a fresh allowance — so
+        // chunk-arrival renewals inside receive() shrink toward the absolute
+        // deadline instead of extending past it.
+        return \max(0.001, $this->handshakeDeadline - \microtime(true));
+    }
+
+    /**
+     * One socket-level wait, bounded by the caller's remaining budget.
+     *
+     * The deadline arithmetic in receive() means nothing if the blocking
+     * primitive itself waits on the constructor-time steady-state timeout: a
+     * peer that accepts and then goes silent parks the first recv() for that
+     * full window before any deadline is rechecked — which is exactly how a
+     * proxy fronting an unreachable backend behaves during connect().
+     */
+    private function recvWithin(float $seconds): string|false
+    {
+        if ($this->client instanceof CoroutineClient) {
+            return @$this->client->recv($seconds);
+        }
+
+        // The synchronous client reads its per-operation timeout from the
+        // client options. Where a build applies options only at connect(),
+        // this degrades to the pre-existing behaviour — the socket waits the
+        // steady-state timeout — and the deadline check above still bounds
+        // the loop; where honoured, the socket-level wait matches the budget.
+        @$this->client->set(['timeout' => $seconds]);
+
+        return @$this->client->recv();
+    }
+
+    /**
      * Receive a message from connection.
      *
      * Swoole's socket `timeout` already bounds a single recv(). Treating false
@@ -495,15 +591,16 @@ class Client
         $chunks = [];
         $receivedLength = 0;
         $responseLength = null;
-        $deadline = \microtime(true) + $this->timeout;
+        $deadline = \microtime(true) + $this->receiveTimeout();
 
         do {
-            if (\microtime(true) >= $deadline) {
+            $remaining = $deadline - \microtime(true);
+            if ($remaining <= 0) {
                 $this->invalidate();
                 throw new Exception('Receive timeout: no data received within reasonable time', 11601);
             }
 
-            $chunk = @$this->client->recv();
+            $chunk = $this->recvWithin(\min($remaining, $this->timeout));
             $errCode = $this->client->errCode ?? 0;
 
             // false => socket-level wait already elapsed with no payload.
@@ -540,7 +637,7 @@ class Client
 
             // Activity: extend idle deadline so large multi-chunk responses
             // are not cut off by a fixed wall-clock budget from the first byte.
-            $deadline = \microtime(true) + $this->timeout;
+            $deadline = \microtime(true) + $this->receiveTimeout();
 
             $chunkLen = \strlen($chunk);
             $receivedLength += $chunkLen;

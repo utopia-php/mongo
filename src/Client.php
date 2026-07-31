@@ -547,6 +547,31 @@ class Client
     }
 
     /**
+     * One socket-level wait, bounded by the caller's remaining budget.
+     *
+     * The deadline arithmetic in receive() means nothing if the blocking
+     * primitive itself waits on the constructor-time steady-state timeout: a
+     * peer that accepts and then goes silent parks the first recv() for that
+     * full window before any deadline is rechecked — which is exactly how a
+     * proxy fronting an unreachable backend behaves during connect().
+     */
+    private function recvWithin(float $seconds): string|false
+    {
+        if ($this->client instanceof CoroutineClient) {
+            return @$this->client->recv($seconds);
+        }
+
+        // The synchronous client reads its per-operation timeout from the
+        // client options. Where a build applies options only at connect(),
+        // this degrades to the pre-existing behaviour — the socket waits the
+        // steady-state timeout — and the deadline check above still bounds
+        // the loop; where honoured, the socket-level wait matches the budget.
+        @$this->client->set(['timeout' => $seconds]);
+
+        return @$this->client->recv();
+    }
+
+    /**
      * Receive a message from connection.
      *
      * Swoole's socket `timeout` already bounds a single recv(). Treating false
@@ -569,12 +594,13 @@ class Client
         $deadline = \microtime(true) + $this->receiveTimeout();
 
         do {
-            if (\microtime(true) >= $deadline) {
+            $remaining = $deadline - \microtime(true);
+            if ($remaining <= 0) {
                 $this->invalidate();
                 throw new Exception('Receive timeout: no data received within reasonable time', 11601);
             }
 
-            $chunk = @$this->client->recv();
+            $chunk = $this->recvWithin(\min($remaining, $this->timeout));
             $errCode = $this->client->errCode ?? 0;
 
             // false => socket-level wait already elapsed with no payload.

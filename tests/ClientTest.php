@@ -33,9 +33,13 @@ trait TransportDouble
         return $result;
     }
 
-    private function receiveTransport(): string|false
+    /** @var list<float> */
+    public array $receiveTimeouts = [];
+
+    private function receiveTransport(float $timeout = 0.0): string|false
     {
         $this->events[] = ['receive'];
+        $this->receiveTimeouts[] = $timeout;
         $receive = array_shift($this->receives) ?? ['result' => '', 'error' => 0];
         $this->errCode = $receive['error'];
 
@@ -59,8 +63,20 @@ final class SyncTransportDouble extends SwooleClient
 
     public array $closes = [];
 
+    /** @var list<float> */
+    public array $timeoutOptions = [];
+
     public function __construct()
     {
+    }
+
+    public function set(array $settings): bool
+    {
+        if (isset($settings['timeout'])) {
+            $this->timeoutOptions[] = (float) $settings['timeout'];
+        }
+
+        return true;
     }
 
     public function close(bool $force = false): bool
@@ -124,7 +140,7 @@ final class CoroutineTransportDouble extends CoroutineClient
 
     public function recv(float $timeout = 0): string|false
     {
-        return $this->receiveTransport();
+        return $this->receiveTransport($timeout);
     }
 
     public function send(string $data, float $timeout = 0): int|false
@@ -301,6 +317,68 @@ final class ClientTest extends TestCase
             $transport->connects,
             'A connect() after a failed handshake must dial again, never reuse the unauthenticated socket',
         );
+    }
+
+    public function testSocketWaitsNeverExceedTheRemainingConnectBudget(): void
+    {
+        // The deadline arithmetic means nothing if the blocking primitive
+        // itself waits on the steady-state timeout: a peer that accepts and
+        // then goes silent parks the first recv() for that full window before
+        // any deadline is rechecked (greptile P1 x3 on #46 — the root).
+        $transport = new CoroutineTransportDouble();
+        $transport->open = false;
+        $transport->receives = [
+            ['result' => $this->frame(['ok' => 1.0]), 'error' => 0],
+            ['result' => $this->frame(['ok' => 1.0]), 'error' => 0],
+        ];
+        $client = $this->client($transport, timeout: 5.0, connectTimeout: 0.2);
+        $this->set($client, 'auth', new AuthenticationDouble());
+
+        $client->connect();
+
+        $this->assertNotSame([], $transport->receiveTimeouts);
+        foreach ($transport->receiveTimeouts as $wait) {
+            $this->assertGreaterThan(0.0, $wait);
+            $this->assertLessThanOrEqual(
+                0.2,
+                $wait,
+                'A handshake socket wait must be bounded by the remaining connect budget, '
+                . 'never the steady-state receive timeout',
+            );
+        }
+
+        $transport->receives = [['result' => $this->frame(['ok' => 1.0]), 'error' => 0]];
+        $transport->receiveTimeouts = [];
+        $client->query(['ping' => 1]);
+
+        $this->assertNotSame([], $transport->receiveTimeouts);
+        $this->assertEqualsWithDelta(
+            5.0,
+            $transport->receiveTimeouts[0],
+            0.05,
+            'Steady-state socket waits must use the full receive timeout again',
+        );
+    }
+
+    public function testSyncSocketWaitsRefreshTheClientTimeoutOption(): void
+    {
+        // The synchronous client cannot take a per-call timeout; the budget
+        // travels through the client options instead, refreshed per wait.
+        $transport = new SyncTransportDouble();
+        $transport->open = false;
+        $transport->receives = [
+            ['result' => $this->frame(['ok' => 1.0]), 'error' => 0],
+            ['result' => $this->frame(['ok' => 1.0]), 'error' => 0],
+        ];
+        $client = $this->client($transport, timeout: 5.0, connectTimeout: 0.2);
+        $this->set($client, 'auth', new AuthenticationDouble());
+
+        $client->connect();
+
+        $this->assertNotSame([], $transport->timeoutOptions);
+        foreach ($transport->timeoutOptions as $wait) {
+            $this->assertLessThanOrEqual(0.2, $wait);
+        }
     }
 
     public function testSyncReceiveFailureHardClosesAndClearsState(): void

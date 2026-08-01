@@ -2178,13 +2178,16 @@ class Client
             }
         }
 
+        // Both throws are raised ahead of the send, so the command never
+        // reached the server and a caller may safely replay it. They carry
+        // HostUnreachable to say so in a code rather than in text.
         if (!$this->isConnected) {
-            throw new Exception('Client is not connected to MongoDB');
+            throw new Exception('Client is not connected to MongoDB', Exception::HOST_UNREACHABLE);
         }
 
         if (!$this->client->isConnected()) {
             $this->isConnected = false;
-            throw new Exception('Connection to MongoDB has been lost');
+            throw new Exception('Connection to MongoDB has been lost', Exception::HOST_UNREACHABLE);
         }
     }
 

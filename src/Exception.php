@@ -9,6 +9,19 @@ namespace Utopia\Mongo;
  */
 class Exception extends \Exception
 {
+    /**
+     * The connection was gone before the command left the client.
+     *
+     * MongoDB's own HostUnreachable. Carried by every throw raised out of
+     * connection validation, which runs ahead of the send: the command was
+     * never on the wire, so nothing was applied and a caller may safely
+     * replay it. Distinguishing this from a post-send failure used to be
+     * possible only by matching the message text, which callers cannot do
+     * safely - a message quotes caller-chosen values, a code cannot be
+     * spelled by a caller.
+     */
+    public const int HOST_UNREACHABLE = 6;
+
     protected array $errorLabels = [];
     protected ?array $writeErrors = null;
     protected ?array $writeConcernErrors = null;
@@ -105,6 +118,15 @@ class Exception extends \Exception
      *
      * @return bool
      */
+    /**
+     * Whether the command was still unsent when this failure was raised, so
+     * nothing was applied and the caller may replay it.
+     */
+    public function isUnsentError(): bool
+    {
+        return $this->code === self::HOST_UNREACHABLE;
+    }
+
     public function isTimeoutError(): bool
     {
         $timeoutCodes = [

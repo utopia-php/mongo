@@ -303,7 +303,7 @@ class Client
         try {
             if (!$this->client->connect($this->host, $this->port, $budget)) {
                 $this->invalidate();
-                throw new Exception("Failed to connect to MongoDB at {$this->host}:{$this->port}");
+                throw new UnsentException("Failed to connect to MongoDB at {$this->host}:{$this->port}");
             }
 
             $this->isConnected = true;
@@ -2178,13 +2178,15 @@ class Client
             }
         }
 
+        // Both throws are raised ahead of the send, so the command never
+        // reached the server and a caller may safely replay it.
         if (!$this->isConnected) {
-            throw new Exception('Client is not connected to MongoDB');
+            throw new UnsentException('Client is not connected to MongoDB');
         }
 
         if (!$this->client->isConnected()) {
             $this->isConnected = false;
-            throw new Exception('Connection to MongoDB has been lost');
+            throw new UnsentException('Connection to MongoDB has been lost');
         }
     }
 

@@ -105,6 +105,20 @@ class Exception extends \Exception
      *
      * @return bool
      */
+    /**
+     * Whether the command was still unsent when this failure was raised, so
+     * nothing was applied and the caller may replay it.
+     *
+     * False here on purpose: this type is what a server's own error response
+     * is parsed into, and that response carries the server's code. Only
+     * {@see UnsentException} — raised solely by the client, solely before it
+     * has sent anything — answers true.
+     */
+    public function isUnsentError(): bool
+    {
+        return false;
+    }
+
     public function isTimeoutError(): bool
     {
         $timeoutCodes = [

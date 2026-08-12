@@ -1694,6 +1694,8 @@ class Client
     /**
      * Convert an object (stdClass) to an assoc array.
      *
+     * A nested object with no properties stays a stdClass, so it re-encodes as {} and not as [].
+     *
      * @param mixed $obj
      * @return array|null
      */
@@ -1703,18 +1705,25 @@ class Client
             return null;
         }
 
-        if (is_object($obj) || is_array($obj)) {
-            $ret = (array)$obj;
-            foreach ($ret as $key => $item) {
-                if ($item instanceof stdClass || is_array($item)) {
-                    $ret[$key] = $this->toArray($item);
-                }
-            }
-
-            return $ret;
+        if (!is_object($obj) && !is_array($obj)) {
+            return [$obj];
         }
 
-        return [$obj];
+        $ret = (array)$obj;
+
+        foreach ($ret as $key => $item) {
+            if ($item instanceof stdClass) {
+                $ret[$key] = (array)$item === [] ? $item : $this->toArray($item);
+
+                continue;
+            }
+
+            if (is_array($item)) {
+                $ret[$key] = $this->toArray($item);
+            }
+        }
+
+        return $ret;
     }
 
     private function cleanFilters($filters): array

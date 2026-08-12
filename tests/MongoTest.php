@@ -393,6 +393,57 @@ class MongoTest extends TestCase
         self::assertEquals([42], $client->toArray(42));
     }
 
+    public function testEmptyObjectSurvivesToArray()
+    {
+        $client = $this->getDatabase();
+
+        $created = $client->insert('movies_empty_object', [
+            '_id' => 'empty-object-1',
+            'empty' => new \stdClass(),
+            'inner' => (object)['nested' => new \stdClass()],
+            'list' => [new \stdClass(), (object)['x' => 1]],
+            'filled' => (object)['a' => 1],
+            'emptyList' => [],
+        ]);
+
+        self::assertSame('{}', json_encode($created['empty']), 'insert() response flattened an empty object');
+        self::assertSame('{"nested":{}}', json_encode($created['inner']), 'insert() response flattened a nested empty object');
+        self::assertSame('[{},{"x":1}]', json_encode($created['list']), 'insert() response flattened an empty object inside a list');
+        self::assertSame('{"a":1}', json_encode($created['filled']));
+        self::assertSame('[]', json_encode($created['emptyList']), 'insert() response turned an empty array into an object');
+
+        self::assertIsArray($created['inner'], 'non-empty objects must still be associative arrays');
+        self::assertSame(['a' => 1], $created['filled'], 'non-empty objects must still be associative arrays');
+
+        $batch = $client->insertMany('movies_empty_object', [[
+            '_id' => 'empty-object-2',
+            'empty' => new \stdClass(),
+            'inner' => (object)['nested' => new \stdClass()],
+            'list' => [new \stdClass(), (object)['x' => 1]],
+        ]]);
+
+        self::assertSame('{}', json_encode($batch[0]['empty']), 'insertMany() response flattened an empty object');
+        self::assertSame('{"nested":{}}', json_encode($batch[0]['inner']), 'insertMany() response flattened a nested empty object');
+        self::assertSame('[{},{"x":1}]', json_encode($batch[0]['list']), 'insertMany() response flattened an empty object inside a list');
+
+        $read = $client->toArray($client->find('movies_empty_object', ['_id' => 'empty-object-1'])->cursor->firstBatch[0]);
+
+        self::assertSame('{}', json_encode($read['empty']), 'read path flattened an empty object');
+        self::assertSame('{"nested":{}}', json_encode($read['inner']), 'read path flattened a nested empty object');
+        self::assertSame('[{},{"x":1}]', json_encode($read['list']), 'read path flattened an empty object inside a list');
+        self::assertSame('{"a":1}', json_encode($read['filled']));
+        self::assertSame('[]', json_encode($read['emptyList']), 'read path turned an empty array into an object');
+
+        $last = $client->lastDocument('movies_empty_object');
+
+        self::assertSame('{}', json_encode($last['empty']), 'lastDocument() flattened an empty object');
+        self::assertSame('{"nested":{}}', json_encode($last['inner']), 'lastDocument() flattened a nested empty object');
+
+        self::assertSame([], $client->toArray(new \stdClass()), 'toArray() returns ?array, so only nested values change shape');
+
+        $client->dropCollection('movies_empty_object');
+    }
+
     public function testCountMethod()
     {
         $collectionName = 'count_test';

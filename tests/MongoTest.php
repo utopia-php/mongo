@@ -320,6 +320,60 @@ class MongoTest extends TestCase
         $client->dropCollection('movies_nested');
     }
 
+    public function testInt64ValuesDecodeToNativeIntegers()
+    {
+        if (\PHP_INT_SIZE < 8) {
+            // normalizeInt64() deliberately keeps the wrapper on 32-bit builds,
+            // where it is the only lossless representation, and the literals
+            // below would already be floats before reaching the driver.
+            self::markTestSkipped('Native int64 round-trip requires a 64-bit PHP build.');
+        }
+
+        $client = $this->getDatabase();
+
+        // Beyond the int32 range, so MongoDB stores these as BSON int64 and
+        // Document::toPHP() hands them back as MongoDB\BSON\Int64 wrappers.
+        $negative = -3408048000;
+        $positive = 3408048000;
+        $extreme = \PHP_INT_MAX;
+
+        try {
+            $client->insert('movies_int64', [
+                '_id' => 'int64-test-1',
+                'small' => -42,
+                'big' => $negative,
+                'list' => [$negative, -42, $positive, $extreme],
+                'nested' => ['deep' => ['value' => $negative]],
+            ]);
+
+            $result = $client->find('movies_int64', ['_id' => 'int64-test-1'])->cursor->firstBatch[0] ?? null;
+            self::assertNotNull($result);
+
+            self::assertIsInt($result->small);
+            self::assertSame(-42, $result->small);
+
+            self::assertIsInt($result->big);
+            self::assertSame($negative, $result->big);
+
+            self::assertIsInt($result->list[0]);
+            self::assertSame($negative, $result->list[0]);
+            self::assertSame(-42, $result->list[1]);
+            self::assertSame($positive, $result->list[2]);
+            self::assertSame($extreme, $result->list[3]);
+
+            self::assertIsInt($result->nested->deep->value);
+            self::assertSame($negative, $result->nested->deep->value);
+
+            // toArray() must carry the native integers through untouched.
+            $array = $client->toArray($result);
+            self::assertSame($negative, $array['big']);
+            self::assertSame([$negative, -42, $positive, $extreme], $array['list']);
+            self::assertSame($negative, $array['nested']['deep']['value']);
+        } finally {
+            $client->dropCollection('movies_int64');
+        }
+    }
+
     public function testToArrayNestedConversion()
     {
         $client = $this->getDatabase();

@@ -322,6 +322,13 @@ class MongoTest extends TestCase
 
     public function testInt64ValuesDecodeToNativeIntegers()
     {
+        if (\PHP_INT_SIZE < 8) {
+            // normalizeInt64() deliberately keeps the wrapper on 32-bit builds,
+            // where it is the only lossless representation, and the literals
+            // below would already be floats before reaching the driver.
+            self::markTestSkipped('Native int64 round-trip requires a 64-bit PHP build.');
+        }
+
         $client = $this->getDatabase();
 
         // Beyond the int32 range, so MongoDB stores these as BSON int64 and

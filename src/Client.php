@@ -1726,6 +1726,49 @@ class Client
         return $ret;
     }
 
+    /**
+     * Replace BSON Int64 wrappers with native PHP integers.
+     *
+     * MongoDB\BSON\Document::toPHP() decodes every 64-bit BSON integer as an
+     * Int64 object on all platforms, so any value outside the int32 range comes
+     * back wrapped. Callers expect plain PHP values, and an Int64 that survives
+     * into user code either fatals when array-accessed or degrades to 1 under an
+     * (int) cast. On 64-bit PHP the unwrap is lossless; on 32-bit builds the
+     * wrapper is the only representation that preserves precision, so it stays.
+     *
+     * @param mixed $value
+     * @param array<string, true> $skip Top-level keys to leave untouched
+     * @return mixed
+     */
+    private static function normalizeInt64(mixed $value, array $skip = []): mixed
+    {
+        if ($value instanceof Int64) {
+            return \PHP_INT_SIZE >= 8 ? (int)(string)$value : $value;
+        }
+
+        if (\is_array($value)) {
+            foreach ($value as $key => $item) {
+                $value[$key] = self::normalizeInt64($item);
+            }
+
+            return $value;
+        }
+
+        if ($value instanceof stdClass) {
+            foreach (\get_object_vars($value) as $key => $item) {
+                if (isset($skip[$key])) {
+                    continue;
+                }
+
+                $value->{$key} = self::normalizeInt64($item);
+            }
+
+            return $value;
+        }
+
+        return $value;
+    }
+
     private function cleanFilters($filters): array
     {
         $cleanedFilters = [];
@@ -1910,6 +1953,11 @@ class Client
             if (\is_array($result)) {
                 $result = (object)$result;
             }
+
+            // $clusterTime is echoed back to the server verbatim on subsequent
+            // commands, so its BSON types must survive intact — signature.keyId
+            // is an int64 the server rejects if it comes back as an int32.
+            $result = self::normalizeInt64($result, ['$clusterTime' => true]);
         } catch (\Throwable $error) {
             $this->invalidate();
             throw new Exception('Failed to parse BSON response: ' . $error->getMessage(), 0, $error);

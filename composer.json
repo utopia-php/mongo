@@ -29,8 +29,7 @@
     },
     "require": {
         "php": ">=8.0",
-        "ext-mongodb": "2.1.*",
-        "mongodb/mongodb": "2.1.*",
+        "ext-mongodb": "^2.1.0",
         "ramsey/uuid": "4.9.*"
     },
     "require-dev": {

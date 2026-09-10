@@ -684,6 +684,59 @@ final class ClientTest extends TestCase
         $exception = $this->receiveException($client);
 
         $this->assertSame(11000, $exception->getCode());
+        $this->assertSame('E11000 DuplicateKey: duplicate key', $exception->getMessage());
+        $this->assertSame([], $exception->getErrorLabels());
+        $this->assertSame([], $transport->closes);
+        $this->assertTrue($transport->open);
+    }
+
+    public function testDecodedMongoCommandErrorPreservesServerLabels(): void
+    {
+        $transport = new SyncTransportDouble();
+        $transport->receives = [[
+            'result' => $this->frame([
+                'ok' => 0.0,
+                'errmsg' => 'host unreachable',
+                'code' => 6,
+                'codeName' => 'HostUnreachable',
+                'errorLabels' => ['RetryableWriteError', 'TransientTransactionError'],
+            ]),
+            'error' => 0,
+        ]];
+        $client = $this->client($transport);
+
+        $exception = $this->receiveException($client);
+
+        $this->assertSame(['RetryableWriteError', 'TransientTransactionError'], $exception->getErrorLabels());
+        $this->assertTrue($exception->isRetryableWrite());
+        $this->assertTrue($exception->isTransientError());
+        $this->assertFalse($exception->isUnsentError());
+        $this->assertSame(6, $exception->getCode());
+        $this->assertSame([], $transport->closes);
+    }
+
+    public function testDecodedMongoCommandErrorTransientLabelDrivesTransientPredicate(): void
+    {
+        $transport = new SyncTransportDouble();
+        $transport->receives = [[
+            'result' => $this->frame([
+                'ok' => 0.0,
+                'errmsg' => 'command failed',
+                'code' => 42,
+                'codeName' => 'CommandFailed',
+                'errorLabels' => ['TransientTransactionError'],
+            ]),
+            'error' => 0,
+        ]];
+        $client = $this->client($transport);
+
+        $exception = $this->receiveException($client);
+
+        $this->assertSame(['TransientTransactionError'], $exception->getErrorLabels());
+        $this->assertTrue($exception->isTransientError());
+        $this->assertFalse($exception->isRetryableWrite());
+        $this->assertFalse($exception->isUnsentError());
+        $this->assertSame(42, $exception->getCode());
         $this->assertSame([], $transport->closes);
         $this->assertTrue($transport->open);
     }
@@ -698,6 +751,7 @@ final class ClientTest extends TestCase
                     'errmsg' => 'primary changed',
                     'code' => $code,
                     'codeName' => 'PrimaryChanged',
+                    'errorLabels' => ['RetryableWriteError'],
                 ]),
                 'error' => 0,
             ]];
@@ -709,6 +763,7 @@ final class ClientTest extends TestCase
 
             try {
                 $this->assertSame($code, $exception->getCode());
+                $this->assertSame(['RetryableWriteError'], $exception->getErrorLabels());
                 $this->assertSame([[true]], $transport->closes);
                 $this->assertSame($sessions, $this->get($client, 'sessions'));
                 $this->assertFalse($this->get($client, 'isConnected'));

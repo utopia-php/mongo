@@ -1983,12 +1983,13 @@ class Client
         if (\property_exists($result, 'errmsg')) {
             $code = (int)($result->code ?? 0);
             $name = (string)($result->codeName ?? 'MongoError');
+            $errorLabels = isset($result->errorLabels) ? array_values((array) $result->errorLabels) : [];
 
             if (self::isPrimaryChange($code)) {
                 $this->invalidate(preserveSessions: true);
             }
 
-            throw new Exception('E' . $code . ' ' . $name . ': ' . $result->errmsg, $code);
+            throw new Exception('E' . $code . ' ' . $name . ': ' . $result->errmsg, $code, null, $errorLabels);
         }
 
         if (!\property_exists($result, 'ok')) {

@@ -1,4 +1,4 @@
-FROM composer:2.0 AS composer
+FROM composer:2.10@sha256:2cf275428757e5435a667bfc0d038b14520ca02be2b1b70d44a05c8c19e2de48 AS composer
 
 ARG TESTING=false
 ENV TESTING=$TESTING
@@ -11,7 +11,7 @@ COPY composer.json /usr/local/src/
 RUN composer update --ignore-platform-reqs --optimize-autoloader \
     --no-plugins --no-scripts --prefer-dist
     
-FROM appwrite/utopia-base:php-8.3-0.1.0 as compile
+FROM appwrite/utopia-base:php-8.3-0.2.1@sha256:e6519df8822d8dc6e4abcdaf7e3eca8ce2199f23bddc932b2a1835722968a542 as compile
 
 ENV PHP_MONGO_VERSION=2.2.1
     

@@ -13,7 +13,7 @@ services:
       - "8882:8882"
 
   mongo:
-    image: mongo:8.2
+    image: mongo:9.0
     container_name: utopia-mongo-1
     networks:
       - database

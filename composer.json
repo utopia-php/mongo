@@ -30,7 +30,7 @@
     "require": {
         "php": ">=8.0",
         "ext-mongodb": "^2.1.0",
-        "ramsey/uuid": "4.9.*"
+        "ramsey/uuid": "4.10.*"
     },
     "require-dev": {
         "fakerphp/faker": "1.*",

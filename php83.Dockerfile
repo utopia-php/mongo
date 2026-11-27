@@ -11,7 +11,7 @@ COPY composer.json /usr/local/src/
 RUN composer update --ignore-platform-reqs --optimize-autoloader \
     --no-plugins --no-scripts --prefer-dist
     
-FROM appwrite/utopia-base:php-8.3-0.1.0 as compile
+FROM appwrite/utopia-base:php-8.3-2.1.9@sha256:a14990b20590707ce74ad2441d4ddd071bf11c3884333846a087083b69392692 as compile
 
 ENV PHP_MONGO_VERSION=2.2.1
     
